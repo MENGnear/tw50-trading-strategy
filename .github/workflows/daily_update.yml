@@ -3,7 +3,7 @@ name: 每日更新與回測 (0050)
 on:
   schedule:
     - cron: '0 10 * * *' # 每天台灣時間 18:00 (UTC 10:00) 自動執行
-  workflow_dispatch: # 允許我們隨時手動點擊「執行」
+  workflow_dispatch: # 允許手動執行
 
 jobs:
   run-strategy:
@@ -30,4 +30,4 @@ jobs:
         with:
           name: tw50-database
           path: tw50_strategy.db
-          retention-days: 7 # 檔案會在 GitHub 雲端保留 7 天供你下載
+          retention-days: 7
