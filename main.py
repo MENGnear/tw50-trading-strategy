@@ -4,29 +4,35 @@ import yfinance as yf
 import sqlite3
 import datetime
 
-# ==========================================
-# 步驟 1: SQLite 資料庫架設與初始化
-# ==========================================
+# 0050 成分股代碼清單 (完整 50 檔)
+tw50_tickers = [
+    '2330.TW', '2454.TW', '2303.TW', '3711.TW', '3034.TW', '2379.TW',
+    '2317.TW', '2308.TW', '2382.TW', '3231.TW', '2324.TW', '2357.TW', 
+    '2395.TW', '3008.TW', '3037.TW', '6669.TW', '3661.TW', '2345.TW', 
+    '2301.TW', '2408.TW', '2412.TW', '3045.TW', '4904.TW', '2881.TW', 
+    '2882.TW', '2891.TW', '2886.TW', '2884.TW', '2892.TW', '2885.TW', 
+    '2880.TW', '2883.TW', '2887.TW', '2890.TW', '5880.TW', '5871.TW',
+    '1301.TW', '1303.TW', '1326.TW', '6505.TW', '2603.TW', '2609.TW', 
+    '2615.TW', '2002.TW', '1101.TW', '1216.TW', '2207.TW', '2912.TW', 
+    '9904.TW', '1590.TW'
+]
+
 def init_db(db_name="tw50_strategy.db"):
-    """初始化 SQLite 資料庫，建立歷史價格與回測結果表"""
+    """初始化 SQLite 資料庫"""
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
-    
-    # 建立歷史數據表 (若不存在)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
             ticker TEXT,
-            date TEXT,
-            open REAL,
-            high REAL,
-            low REAL,
-            close REAL,
-            volume INTEGER,
-            PRIMARY KEY (ticker, date)
+            Date TEXT,
+            Open REAL,
+            High REAL,
+            Low REAL,
+            Close REAL,
+            Volume INTEGER,
+            PRIMARY KEY (ticker, Date)
         )
     ''')
-    
-    # 建立回測交易紀錄表
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,15 +47,11 @@ def init_db(db_name="tw50_strategy.db"):
     conn.commit()
     return conn
 
-# ==========================================
-# 步驟 2: V02.1 演算法與回測邏輯 (不含推播)
-# ==========================================
 def calculate_v021_and_backtest(df, ticker):
     """計算 V02.1 指標並執行 MA20 停利回測"""
-    # 確保資料依照時間排序並清理空值
     df = df.sort_values('Date').dropna().reset_index(drop=True)
     
-    # --- 計算基礎技術指標 ---
+    # 基礎指標
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
     df['MA120'] = df['Close'].rolling(120).mean()
@@ -64,7 +66,7 @@ def calculate_v021_and_backtest(df, ticker):
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     df['Prev_Hist'] = df['MACD_Hist'].shift(1)
     
-    # RSI (標準 EMA 算法)
+    # RSI
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -80,26 +82,22 @@ def calculate_v021_and_backtest(df, ticker):
     df['K'] = df['RSV'].ewm(com=2, adjust=False).mean()
     df['D'] = df['K'].ewm(com=2, adjust=False).mean()
     
-    # --- V02.1 狀態型評分系統 ---
-    # Trend (30分)
+    # V02.1 評分計算
     t1 = (df['DIF'] > df['DEA']).astype(int) * 15
     t2 = (df['DIF'] > 0).astype(int) * 5
     t3 = (df['MACD_Hist'] > df['Prev_Hist']).astype(int) * 10
     score_t = t1 + t2 + t3
     
-    # MA (25分)
     m1 = (df['Close'] > df['MA20']).astype(int) * 5
     m2 = (df['MA20'] > df['MA60']).astype(int) * 10
     m3 = (df['MA60'] > df['MA120']).astype(int) * 10
     score_m = m1 + m2 + m3
     
-    # Momentum (20分)
     r1 = (df['RSI'] > 50).astype(int) * 5
     r2 = (df['RSI'] > 60).astype(int) * 5
     r3 = (df['K'] > df['D']).astype(int) * 10
     score_r = r1 + r2 + r3
     
-    # Volume (15分)
     v1 = (df['Volume'] > df['V_MA5']).astype(int) * 5
     v2 = (df['Volume'] > df['V_MA10']).astype(int) * 5
     v3 = (df['Volume'] > df['V_MA5'] * 1.5).astype(int) * 5
@@ -107,7 +105,7 @@ def calculate_v021_and_backtest(df, ticker):
     
     df['Score'] = score_t + score_m + score_r + score_v
     
-    # --- 執行回測：分數 >= 75 進場，跌破 MA20 出場 ---
+    # 執行回測
     trades = []
     in_position = False
     entry_price = 0
@@ -121,13 +119,11 @@ def calculate_v021_and_backtest(df, ticker):
         if not in_position:
             if today['Score'] >= 75:
                 signal_day_high = today['High']
-                # 隔日突破訊號日高點進場
                 if tomorrow['High'] > signal_day_high:
                     in_position = True
                     entry_price = max(tomorrow['Open'], signal_day_high)
                     entry_date = tomorrow['Date'].strftime('%Y-%m-%d')
         else:
-            # 跌破 MA20 停利/停損
             if tomorrow['Close'] < tomorrow['MA20']:
                 if i+2 < len(df):
                     next_day = df.iloc[i+2]
@@ -139,7 +135,6 @@ def calculate_v021_and_backtest(df, ticker):
                     ))
                     in_position = False
                     
-    # 強制平倉最後一筆
     if in_position:
         last_day = df.iloc[-1]
         exit_price = last_day['Close']
@@ -151,16 +146,7 @@ def calculate_v021_and_backtest(df, ticker):
         
     return trades
 
-# ==========================================
-# 步驟 3: 抓取 0050 成分股資料並寫入 DB
-# ==========================================
 def run_0050_batch(conn):
-    # 台灣 50 成分股代碼 (此處列舉部分作為範例，實戰可補齊 50 檔)
-    tw50_tickers = [
-        '2330.TW', '2317.TW', '2454.TW', '2308.TW', '2382.TW', 
-        '2881.TW', '2882.TW', '2891.TW', '2412.TW', '3231.TW'
-    ]
-    
     start_date = (datetime.datetime.now() - datetime.timedelta(days=3650)).strftime('%Y-%m-%d')
     end_date = datetime.datetime.now().strftime('%Y-%m-%d')
     
@@ -169,30 +155,32 @@ def run_0050_batch(conn):
     for ticker in tw50_tickers:
         print(f"正在處理: {ticker}...")
         try:
-            # 從 yfinance 下載 10 年資料
+            # 抓取資料
             stock_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
             if stock_data.empty:
                 continue
                 
-            # 重設 index 讓 Date 變成欄位，並過濾欄位
+            # 【關鍵修復】: 將新版 yfinance 的雙層 MultiIndex 欄位壓平為單層
+            if isinstance(stock_data.columns, pd.MultiIndex):
+                stock_data.columns = stock_data.columns.get_level_values(0)
+                
+            # 準備寫入資料庫的格式
             df = stock_data.reset_index()
-            # 寫入 SQLite (日線資料)
             df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
             df_to_db['Date'] = df_to_db['Date'].dt.strftime('%Y-%m-%d')
             df_to_db.insert(0, 'ticker', ticker)
             
-            # 使用 pandas 內建功能快速匯入資料庫
+            # 寫入 SQLite
             df_to_db.to_sql('daily_price', conn, if_exists='append', index=False, 
                             method='multi', chunksize=1000)
             
-            # 執行回測邏輯
+            # 回測運算
             trades = calculate_v021_and_backtest(df, ticker)
             all_trades.extend(trades)
             
         except Exception as e:
             print(f"處理 {ticker} 時發生錯誤: {e}")
             
-    # 將回測結果寫入資料庫
     if all_trades:
         cursor = conn.cursor()
         cursor.executemany('''
@@ -200,14 +188,12 @@ def run_0050_batch(conn):
             VALUES (?, ?, ?, ?, ?, ?)
         ''', all_trades)
         conn.commit()
-        print(f"\n✅ 成功完成回測，共產生 {len(all_trades)} 筆交易紀錄已存入資料庫。")
+        print(f"\n✅ 成功完成回測，共存入 {len(all_trades)} 筆交易紀錄。")
 
-# --- 執行主程式 ---
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
     run_0050_batch(db_connection)
     
-    # 驗證資料庫查詢
     print("\n--- 讀取回測績效前 5 名的交易 ---")
     top_trades = pd.read_sql_query('''
         SELECT ticker, entry_date, exit_date, round(profit_pct*100, 2) as profit_pct
