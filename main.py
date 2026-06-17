@@ -3,8 +3,11 @@ import numpy as np
 import yfinance as yf
 import sqlite3
 import datetime
+import os
+import urllib.request
+import json
 
-# 0050 成分股代碼清單 (完整 50 檔)
+# 0050 成分股代碼清單
 tw50_tickers = [
     '2330.TW', '2454.TW', '2303.TW', '3711.TW', '3034.TW', '2379.TW',
     '2317.TW', '2308.TW', '2382.TW', '3231.TW', '2324.TW', '2357.TW', 
@@ -17,48 +20,56 @@ tw50_tickers = [
     '9904.TW', '1590.TW'
 ]
 
+def send_telegram_alert(message):
+    """讀取 GitHub Secrets 並發送 Telegram 推播"""
+    token = os.environ.get('TELEGRAM_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+
+    if not token or not chat_id:
+        print("未設定 Telegram 金鑰，跳過推播。")
+        return
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = json.dumps({
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }).encode('utf-8')
+
+    req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req) as response:
+            print("✅ Telegram 推播成功！")
+    except Exception as e:
+        print(f"❌ Telegram 推播失敗: {e}")
+
 def init_db(db_name="tw50_strategy.db"):
-    """初始化 SQLite 資料庫"""
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
-            ticker TEXT,
-            Date TEXT,
-            Open REAL,
-            High REAL,
-            Low REAL,
-            Close REAL,
-            Volume INTEGER,
+            ticker TEXT, Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume INTEGER,
             PRIMARY KEY (ticker, Date)
         )
     ''')
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT,
-            entry_date TEXT,
-            exit_date TEXT,
-            entry_price REAL,
-            exit_price REAL,
-            profit_pct REAL
+            ticker TEXT, entry_date TEXT, exit_date TEXT, entry_price REAL, exit_price REAL, profit_pct REAL
         )
     ''')
     conn.commit()
     return conn
 
 def calculate_v021_and_backtest(df, ticker):
-    """計算 V02.1 指標並執行 MA20 停利回測"""
     df = df.sort_values('Date').dropna().reset_index(drop=True)
     
-    # 基礎指標
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
     df['MA120'] = df['Close'].rolling(120).mean()
     df['V_MA5'] = df['Volume'].rolling(5).mean()
     df['V_MA10'] = df['Volume'].rolling(10).mean()
     
-    # MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
@@ -66,7 +77,6 @@ def calculate_v021_and_backtest(df, ticker):
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     df['Prev_Hist'] = df['MACD_Hist'].shift(1)
     
-    # RSI
     delta = df['Close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
@@ -75,14 +85,12 @@ def calculate_v021_and_backtest(df, ticker):
     rs = ema_up / ema_down
     df['RSI'] = 100 - (100 / (1 + rs))
     
-    # KD
     low_min = df['Low'].rolling(9).min()
     high_max = df['High'].rolling(9).max()
     df['RSV'] = 100 * (df['Close'] - low_min) / (high_max - low_min)
     df['K'] = df['RSV'].ewm(com=2, adjust=False).mean()
     df['D'] = df['K'].ewm(com=2, adjust=False).mean()
     
-    # V02.1 評分計算
     t1 = (df['DIF'] > df['DEA']).astype(int) * 15
     t2 = (df['DIF'] > 0).astype(int) * 5
     t3 = (df['MACD_Hist'] > df['Prev_Hist']).astype(int) * 10
@@ -105,7 +113,6 @@ def calculate_v021_and_backtest(df, ticker):
     
     df['Score'] = score_t + score_m + score_r + score_v
     
-    # 執行回測
     trades = []
     in_position = False
     entry_price = 0
@@ -151,33 +158,43 @@ def run_0050_batch(conn):
     end_date = datetime.datetime.now().strftime('%Y-%m-%d')
     
     all_trades = []
+    daily_alerts = [] # 用來收集今日觸發的推播訊息
     
     for ticker in tw50_tickers:
         print(f"正在處理: {ticker}...")
         try:
-            # 抓取資料
             stock_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
             if stock_data.empty:
                 continue
                 
-            # 【關鍵修復】: 將新版 yfinance 的雙層 MultiIndex 欄位壓平為單層
             if isinstance(stock_data.columns, pd.MultiIndex):
                 stock_data.columns = stock_data.columns.get_level_values(0)
                 
-            # 準備寫入資料庫的格式
             df = stock_data.reset_index()
             df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
             df_to_db['Date'] = df_to_db['Date'].dt.strftime('%Y-%m-%d')
             df_to_db.insert(0, 'ticker', ticker)
             
-            # 寫入 SQLite
-            df_to_db.to_sql('daily_price', conn, if_exists='append', index=False, 
-                            method='multi', chunksize=1000)
+            df_to_db.to_sql('daily_price', conn, if_exists='append', index=False, method='multi', chunksize=1000)
             
-            # 回測運算
+            # 回測並同時計算最新分數
             trades = calculate_v021_and_backtest(df, ticker)
             all_trades.extend(trades)
             
+            # --- 檢查推播條件 ---
+            if len(df) >= 2:
+                latest_day = df.iloc[-1]
+                yesterday = df.iloc[-2]
+                score = latest_day['Score']
+                score_delta = score - yesterday['Score']
+                
+                # 如果最新分數大於等於 75 分，加入推播清單
+                if pd.notna(score) and score >= 75:
+                    close_price = latest_day['Close']
+                    ma20 = latest_day['MA20']
+                    alert_text = f"🎯 *{ticker}*\n評分: {int(score)} (變動: {int(score_delta):+d})\n收盤: {close_price:.2f} | 🛡️ MA20防守: {ma20:.2f}"
+                    daily_alerts.append(alert_text)
+                    
         except Exception as e:
             print(f"處理 {ticker} 時發生錯誤: {e}")
             
@@ -188,18 +205,16 @@ def run_0050_batch(conn):
             VALUES (?, ?, ?, ?, ?, ?)
         ''', all_trades)
         conn.commit()
-        print(f"\n✅ 成功完成回測，共存入 {len(all_trades)} 筆交易紀錄。")
+    
+    # 執行 Telegram 推播
+    if daily_alerts:
+        msg = "🚀 *V02.1 台股 50 強勢股雷達* 🚀\n今日觸發進場訊號：\n\n" + "\n\n".join(daily_alerts)
+    else:
+        msg = "📊 *V02.1 台股 50 雷達*\n今日掃描完畢，無符合 >= 75 分的強勢起漲標的。"
+        
+    send_telegram_alert(msg)
 
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
     run_0050_batch(db_connection)
-    
-    print("\n--- 讀取回測績效前 5 名的交易 ---")
-    top_trades = pd.read_sql_query('''
-        SELECT ticker, entry_date, exit_date, round(profit_pct*100, 2) as profit_pct
-        FROM backtest_trades 
-        ORDER BY profit_pct DESC LIMIT 5
-    ''', db_connection)
-    print(top_trades)
-    
     db_connection.close()
