@@ -1,11 +1,12 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-#  版次 v02.6 (回測精確對齊與 DBA 強制升級版)
+#  檔名：main.py
+#  版次：v02.6 (回測精確對齊與 DBA 強制升級版)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 #  新增與優化：
-#  1. [訊號A] Buy Stop 真實對齊：修正為 `> signal_day_high`，並嚴格限制「首日達標」才算有效 Setup，消滅洗版。
-#  2. [訊號B] 價格預估精確化：推播加入 trigger_price 與 estimated_entry 預估實際成交價。
-#  3. [資料庫C] Schema Migration：新增 DROP TABLE 機制強制升級結構，解決欄位變更報錯問題。
+#  1. [訊號A] Buy Stop 真實對齊：修正為 `> signal_day_high`，首日達標才算有效 Setup。
+#  2. [訊號B] 價格預估精確化：推播加入 trigger_price 與 estimated_entry。
+#  3. [資料庫C] Schema Migration：新增 DROP TABLE 機制強制升級結構，防舊欄位報錯。
 #  4. [資料庫D] DBA 精簡化：移除冗餘的 ticker 複合索引。
 #  5. [效能E] 移除未使用的 MA120，徹底釋放 CPU 運算資源。
 # ==========================================================
@@ -115,14 +116,14 @@ def calculate_v026_and_backtest(df, ticker, strategy_version="v02.6"):
     entry_idx = 0
     trade_max_drawdown = 0.0
     
-    # 由於移除了 MA120，現在最大需求是 MA60，迴圈可以從 65 開始
+    # MA最高到60，迴圈從 65 開始即可
     for i in range(65, len(df)-1):
         today = df.iloc[i]
         tomorrow = df.iloc[i+1]
         yesterday = df.iloc[i-1]
         
         if not in_position:
-            # 嚴格化 Setup 條件：首日達標才算 (解決連續推播與重複觸發的 Bug)
+            # 嚴格化 Setup 條件：首日達標才算 (消滅連續洗版)
             if today['Score'] >= 45 and yesterday['Score'] < 45: 
                 signal_day_high = today['High']
                 entry_score = today['Score']
@@ -239,13 +240,13 @@ def run_0050_batch(conn):
     strategy_version = "v02.6"
     sync_daily_data(conn)
     
-    print(f"🚀 啟推 {strategy_version} 回測引擎...")
+    print(f"🚀 啟動 {strategy_version} 回測引擎...")
     
     all_trades = []
     alerts_trigger = []
     alerts_watchlist = []
     cursor = conn.cursor()
-    # 因為我們有 DROP TABLE，所以這裡不需再 DELETE FROM
+    # Schema Migration 已刪除表格，此處直接新增即可
     
     for ticker in tw50_tickers:
         try:
@@ -256,7 +257,6 @@ def run_0050_batch(conn):
                 parse_dates=['Date']
             )
             
-            # 從 MA120 降至 MA60 後，只需確保資料大於 65 筆即可
             if len(df_full) < 65: continue
                 
             trades, df_updated = calculate_v026_and_backtest(df_full, ticker, strategy_version)
@@ -273,7 +273,7 @@ def run_0050_batch(conn):
             # 1. 新增觀察 (Edge Trigger)：昨日未達標，今日首日達標
             is_new_setup = (pd.notna(score_today) and score_today >= 45) and (pd.notna(score_yest) and score_yest < 45)
             
-            # 2. 突破進場 (Buy Stop)：昨日為首日達標，且今日發生真突破 (大於昨日高點)
+            # 2. 突破進場 (Buy Stop)：昨日為首日達標，且今日發生真突破
             is_trigger = (pd.notna(score_yest) and score_yest >= 45) and \
                          (pd.notna(score_before) and score_before < 45) and \
                          (latest_day['High'] > yesterday['High'])
