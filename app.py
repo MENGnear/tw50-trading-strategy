@@ -1,12 +1,11 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-#  版次 v02.5 (視覺戰情室 - 精確量化指標版)
+#  版次 v02.6 (視覺戰情室 - 效能與細節優化版)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 #  新增與優化：
-#  1. [指標正名] 同步後端資料庫，將 MDD 欄位精準解析為 trade_max_drawdown_pct (單筆最大回撤)。
-#  2. [相容性] 確保舊版資料庫平滑升級，導入防呆欄位檢查機制。
-#  3. [全域版本] 介面、KPI 運算邏輯與預設搜尋器全面推進至 v02.5。
-#  4. [結構化] 導入與 main.py 一致的標準化註解排版，大幅提升開發閱讀性。
+#  1. [效能A] 隨同後端引擎，移除網頁端不必要的 MA120 即時運算。
+#  2. [視覺B] 全面套用 .format()，將價格、利潤、回撤皆精確控制至小數點後兩位。
+#  3. [全域版本] 介面、預設搜尋器全面推進至 v02.6。
 # ==========================================================
 
 # ==========================================================
@@ -19,8 +18,8 @@ import numpy as np
 import plotly.graph_objects as gr
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="V02.5 台股50戰情室", page_icon="🚀", layout="wide")
-st.title("🚀 V02.5 台股 50 視覺化數據中心")
+st.set_page_config(page_title="V02.6 台股50戰情室", page_icon="🚀", layout="wide")
+st.title("🚀 V02.6 台股 50 視覺化數據中心")
 st.markdown("本網頁自動讀取雲端回測資料庫 `tw50_strategy.db`，展示包含單筆 MDD 等高階量化指標的即時分析。")
 
 # ==========================================================
@@ -28,10 +27,8 @@ st.markdown("本網頁自動讀取雲端回測資料庫 `tw50_strategy.db`，展
 # ==========================================================
 @st.cache_data(ttl=3600)
 def load_data_from_db():
-    """從 SQLite 讀取 K 線與交易資料，並自動轉型日期"""
     try:
         conn = sqlite3.connect('tw50_strategy.db')
-        # 優化：利用 parse_dates 直接在讀取時轉型
         df_price = pd.read_sql_query("SELECT * FROM daily_price", conn, parse_dates=['Date'])
         df_trades = pd.read_sql_query("SELECT * FROM backtest_trades", conn)
         conn.close()
@@ -43,10 +40,9 @@ def load_data_from_db():
 df_price, df_trades = load_data_from_db()
 
 # ==========================================================
-# 3️⃣ 🧠 v02.5 網頁端即時評分引擎 (用於繪製動態圖表)
+# 3️⃣ 🧠 v02.6 網頁端即時評分引擎 (用於繪製動態圖表)
 # ==========================================================
 def compute_scores_for_app(df):
-    """同步 v02.5 核心評分邏輯，確保圖表訊號與後台一致"""
     df = df.sort_values('Date').reset_index(drop=True)
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
@@ -58,12 +54,11 @@ def compute_scores_for_app(df):
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # 同步 v02.5 評分權重
     t1 = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
     m1 = (df['Close'] > df['MA20']).astype(int) * 10
-    m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 # MA20 斜率濾網
+    m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
     m3 = (df['MA20'] > df['MA60']).astype(int) * 10
-    v1 = (df['Volume'] > df['V_MA5'] * 1.3).astype(int) * 10 # 1.3倍量能門檻
+    v1 = (df['Volume'] > df['V_MA5'] * 1.3).astype(int) * 10 
     
     df['Score'] = t1 + m1 + m2 + m3 + v1
     return df
@@ -73,15 +68,12 @@ def compute_scores_for_app(df):
 # ==========================================================
 st.sidebar.header("⚙️ 戰術設定")
 
-# 策略版本篩選器
-available_versions = df_trades['version'].unique().tolist() if 'version' in df_trades.columns else ["v02.5"]
+available_versions = df_trades['version'].unique().tolist() if 'version' in df_trades.columns else ["v02.6"]
 selected_version = st.sidebar.selectbox("📂 選擇策略版本", available_versions, index=len(available_versions)-1 if available_versions else 0)
 
-# 個股篩選器
 ticker_list = sorted(df_price['ticker'].unique())
 selected_ticker = st.sidebar.selectbox("🔍 選擇分析個股", ticker_list)
 
-# 準備繪圖與顯示用的子資料集
 sub_price = df_price[df_price['ticker'] == selected_ticker].copy()
 sub_price = compute_scores_for_app(sub_price)
 
@@ -101,7 +93,7 @@ if len(sub_price) >= 2:
     
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("v02.5 最新評分", f"{current_score} 分", delta=f"{delta_score} 分")
+        st.metric("v02.6 最新評分", f"{current_score} 分", delta=f"{delta_score} 分")
     with col2:
         ma20_status = "🟢 站上月線" if latest_day['Close'] >= latest_day['MA20'] else "🔴 跌破月線"
         st.metric("MA20 狀態", ma20_status)
@@ -120,19 +112,15 @@ if len(sub_price) >= 2:
 st.subheader("📈 歷史走勢與策略動態觀測")
 
 fig = make_subplots(specs=[[{"secondary_y": True}]])
-# 繪製主軸：收盤價與均線
 fig.add_trace(gr.Scatter(x=sub_price['Date'], y=sub_price['Close'], name="收盤價", line=dict(color='gray', width=1.5)), secondary_y=False)
 fig.add_trace(gr.Scatter(x=sub_price['Date'], y=sub_price['MA20'], name="MA20 月線", line=dict(dash='dash')), secondary_y=False)
+fig.add_trace(gr.Scatter(x=sub_price['Date'], y=sub_price['Score'], name="v02.6 分數", line=dict(color='orange', width=2)), secondary_y=True)
 
-# 繪製副軸：v02.5 分數
-fig.add_trace(gr.Scatter(x=sub_price['Date'], y=sub_price['Score'], name="v02.5 分數", line=dict(color='orange', width=2)), secondary_y=True)
-
-# 標示 45 分起漲觀察門檻線
 fig.add_shape(type="line", x0=sub_price['Date'].min(), y0=45, x1=sub_price['Date'].max(), y1=45, line=dict(color="red", dash="dot"), secondary_y=True)
 
-fig.update_layout(title_text=f"{selected_ticker} 走勢與 v02.5 分數對照", hovermode="x unified", height=500)
+fig.update_layout(title_text=f"{selected_ticker} 走勢與 v02.6 分數對照", hovermode="x unified", height=500)
 fig.update_yaxes(title_text="<b>股價 (元)</b>", secondary_y=False)
-fig.update_yaxes(title_text="<b>v02.5 策略分數</b>", range=[0, 65], secondary_y=True)
+fig.update_yaxes(title_text="<b>v02.6 策略分數</b>", range=[0, 65], secondary_y=True)
 
 st.plotly_chart(fig, use_container_width=True)
 
@@ -142,17 +130,13 @@ st.plotly_chart(fig, use_container_width=True)
 st.subheader(f"💼 {selected_version} 策略實戰明細")
 
 if not sub_trades.empty:
-    # 數值百分比化處理
     sub_trades['profit_pct'] = (sub_trades['profit_pct'] * 100).round(2)
-    
-    # 支援 v02.5 正名後的 trade_max_drawdown_pct 欄位
     mdd_col = 'trade_max_drawdown_pct' if 'trade_max_drawdown_pct' in sub_trades.columns else 'max_drawdown_pct'
     
     if mdd_col in sub_trades.columns and 'max_profit_pct' in sub_trades.columns:
         sub_trades['max_profit_pct'] = (sub_trades['max_profit_pct'] * 100).round(2)
         sub_trades[mdd_col] = (sub_trades[mdd_col] * 100).round(2)
         
-        # 欄位解析與重新命名
         show_trades = sub_trades[['entry_date', 'exit_date', 'entry_price', 'exit_price', 'holding_bars', 'max_profit_pct', mdd_col, 'profit_pct']].rename(
             columns={
                 'entry_date': '進場日期', 'exit_date': '出場日期', 
@@ -163,8 +147,11 @@ if not sub_trades.empty:
             }
         ).sort_values('進場日期', ascending=False)
     else:
-        # 舊版本相容顯示
-        st.dataframe(
+        show_trades = sub_trades[['entry_date', 'exit_date', 'entry_price', 'exit_price', 'profit_pct']].rename(
+            columns={'entry_date': '進場日期', 'exit_date': '出場日期', 'entry_price': '進場價', 'exit_price': '出場價', 'profit_pct': '最終報酬 (%)'}
+        ).sort_values('進場日期', ascending=False)
+    
+    st.dataframe(
         show_trades.style
         .format({
             '進場價': '{:.2f}', 
@@ -174,12 +161,6 @@ if not sub_trades.empty:
             '最終報酬 (%)': '{:.2f}'
         })
         .background_gradient(subset=['最終報酬 (%)'], cmap='RdYlGn', vmin=-10, vmax=30), 
-        use_container_width=True
-    )
-
-    # 使用漸層色彩呈現報酬結果 (需搭配 matplotlib)
-    st.dataframe(
-        show_trades.style.background_gradient(subset=['最終報酬 (%)'], cmap='RdYlGn', vmin=-10, vmax=30), 
         use_container_width=True
     )
 else:
