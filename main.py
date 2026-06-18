@@ -282,9 +282,9 @@ def run_0050_batch(conn):
                 trigger_price = yesterday['High']
                 estimated_entry = max(latest_day['Open'], trigger_price)
                 alerts_trigger.append(
-                    f"🚀 *{ticker}* 突破進場!\n"
+                    f"🚀 *{ticker}* 今日盤中監控:\n"
                     f"突破價位: {trigger_price:.2f}\n"
-                    f"預估成交: {estimated_entry:.2f}\n"
+                    f"若突破此價，則執行進場。\n"
                     f"🛡️ 防守月線: {latest_day['MA20']:.2f}"
                 )
             elif is_new_setup:
