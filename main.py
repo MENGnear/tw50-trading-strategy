@@ -1,20 +1,14 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-#  版次 v02.4 (架構強化與邊緣觸發版)
+#  版次 v02.5 (量化微結構與 DBA 終極優化版)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 #  新增與優化：
-#  1. [資料庫A] 新增 CREATE INDEX 建立 ticker 索引，未來擴充多檔 ETF 查詢速度提升百倍。
-#  2. [資料庫B] 實作 VACUUM 指令，在滾動刪除 5 年前資料後，真正釋放硬碟空間。
-#  3. [Bug修復C] 修復 pd.read_sql_query 缺少 params=(ticker,) 的致命綁定錯誤。
-#  4. [Bug修復D] 強制將 SQL 讀出的 Date 字串轉型為 datetime64，避免 strftime 報錯。
-#  5. [推播E] 導入 Edge Trigger (邊緣觸發) 邏輯：今日 >= 45 且昨日 < 45 才推播，避免連漲洗版。
-#  6. [時區F] 強制綁定 Asia/Taipei (UTC+8) 時區，徹底解決 GitHub Actions 跨時區換日提早下載的問題。
-#  7. [回測G] 標準化 High-Water Mark (高水位線) 最大回撤 (MDD) 計算邏輯。
+#  1. [推播A] 導入「雙軌警報」：精確區分「👀 新增觀察 (Edge Trigger)」與「🚀 突破進場 (Buy Stop)」。
+#  2. [資料庫B] DBA 級效能控管：移除冗餘索引 (複合主鍵已含 B-Tree)；VACUUM 改為每月 1 號例行大掃除。
+#  3. [架構C] 名詞精確定義：將 max_drawdown_pct 更名為 trade_max_drawdown_pct (單筆最大回撤)。
+#  4. [效能D] Pandas 原生優化：以 parse_dates=['Date'] 取代 df 迴圈轉型，提升底層 C 語言讀取效能。
 # ==========================================================
 
-# ==========================================================
-# 1️⃣ 🚀 系統全域設定與套件匯入
-# ==========================================================
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -36,12 +30,8 @@ tw50_tickers = [
     '9904.TW', '1590.TW'
 ]
 
-# 設定台灣專屬時區 (UTC+8)
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
-# ==========================================================
-# 2️⃣ 📡 Telegram 警報推播模組
-# ==========================================================
 def send_telegram_alert(message):
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
@@ -57,39 +47,30 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"❌ Telegram 推播失敗: {e}")
 
-# ==========================================================
-# 3️⃣ 🗄️ SQLite 資料庫建置與連線模組
-# ==========================================================
 def init_db(db_name="tw50_strategy.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
+    # 複合主鍵已自帶 B-Tree 索引，移除冗餘 CREATE INDEX
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
             ticker TEXT, Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume INTEGER,
             PRIMARY KEY (ticker, Date)
         )
     ''')
-    
-    # 優化1：建立資料庫索引，提升未來全市場回測速度
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_daily_price_ticker ON daily_price(ticker)')
-    
+    # 欄位正名：trade_max_drawdown_pct
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             version TEXT, ticker TEXT, entry_date TEXT, exit_date TEXT, 
             entry_price REAL, exit_price REAL, profit_pct REAL,
-            holding_bars INTEGER, max_profit_pct REAL, max_drawdown_pct REAL, entry_score REAL
+            holding_bars INTEGER, max_profit_pct REAL, trade_max_drawdown_pct REAL, entry_score REAL
         )
     ''')
     conn.commit()
     return conn
 
-# ==========================================================
-# 4️⃣ 🧠 v02.4 核心評分與實戰回測引擎
-# ==========================================================
-def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
-    # Bug修復2：確保 Date 是 datetime64，避免後續 strftime 報錯
-    df['Date'] = pd.to_datetime(df['Date'])
+def calculate_v025_and_backtest(df, ticker, strategy_version="v02.5"):
+    # Date 已經在 read_sql_query 時透過 parse_dates 轉型
     df = df.sort_values('Date').dropna().reset_index(drop=True)
     
     df['MA20'] = df['Close'].rolling(20).mean()
@@ -118,7 +99,7 @@ def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
     
     peak_price = 0
     entry_idx = 0
-    max_drawdown = 0.0
+    trade_max_drawdown = 0.0
     
     for i in range(120, len(df)-1):
         today = df.iloc[i]
@@ -135,12 +116,11 @@ def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
                     entry_date = tomorrow['Date']
                     entry_idx = i + 1
                     peak_price = entry_price 
-                    max_drawdown = 0.0
+                    trade_max_drawdown = 0.0
         else:
-            # 問題3優化：標準 High-Water Mark MDD 計算
             peak_price = max(peak_price, tomorrow['High'])
             current_drawdown = (tomorrow['Low'] - peak_price) / peak_price
-            max_drawdown = min(max_drawdown, current_drawdown)
+            trade_max_drawdown = min(trade_max_drawdown, current_drawdown)
             
             stop_loss_price = entry_price * 0.92
             
@@ -151,7 +131,7 @@ def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
                 holding_bars = (i + 1) - entry_idx
                 max_p = (peak_price - entry_price) / entry_price
                 
-                trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, profit_pct, holding_bars, max_p, max_drawdown, entry_score))
+                trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown, entry_score))
                 in_position = False
                 
             elif tomorrow['Close'] < tomorrow['MA20']:
@@ -164,7 +144,7 @@ def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
                     
                     temp_peak = max(peak_price, next_day['High'])
                     temp_drawdown = (next_day['Low'] - temp_peak) / temp_peak
-                    final_mdd = min(max_drawdown, temp_drawdown)
+                    final_mdd = min(trade_max_drawdown, temp_drawdown)
                     max_p = (temp_peak - entry_price) / entry_price
                     
                     trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, profit_pct, holding_bars, max_p, final_mdd, entry_score))
@@ -179,19 +159,15 @@ def calculate_v024_and_backtest(df, ticker, strategy_version="V02.4"):
         
         temp_peak = max(peak_price, last_day['High'])
         temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
-        final_mdd = min(max_drawdown, temp_drawdown)
+        final_mdd = min(trade_max_drawdown, temp_drawdown)
         max_p = (temp_peak - entry_price) / entry_price
         
         trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, profit_pct, holding_bars, max_p, final_mdd, entry_score))
         
     return trades, df
 
-# ==========================================================
-# 5️⃣ 🏭 智能增量更新與主程式
-# ==========================================================
 def sync_daily_data(conn):
     cursor = conn.cursor()
-    # 問題4修復：強制使用台灣時區，避免 GitHub UTC 跨日錯誤
     today = datetime.datetime.now(TAIPEI_TZ)
     
     cursor.execute("SELECT MAX(Date) FROM daily_price")
@@ -200,13 +176,12 @@ def sync_daily_data(conn):
     if last_date:
         start_date_obj = datetime.datetime.strptime(last_date, '%Y-%m-%d') - datetime.timedelta(days=2)
         start_date = start_date_obj.strftime('%Y-%m-%d')
-        print(f"📊 偵測到既有資料庫 (最新資料: {last_date})。啟動增量更新，抓取區間: {start_date} 至今...")
+        print(f"📊 增量更新，抓取區間: {start_date} 至今...")
     else:
         start_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
-        print(f"⚠️ 資料庫為空！啟動初次歷史資料大撒網下載，抓取區間: {start_date} 至今...")
+        print(f"⚠️ 初次下載，抓取區間: {start_date} 至今...")
 
     end_date = (today + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
-    
     raw_data = yf.download(tw50_tickers, start=start_date, end=end_date, group_by='ticker', progress=False, threads=False)
     
     all_records = []
@@ -215,14 +190,13 @@ def sync_daily_data(conn):
             if ticker in raw_data:
                 stock_data = raw_data[ticker].dropna(how='all').copy()
                 if stock_data.empty: continue
-                
                 df = stock_data.reset_index()
                 df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
                 df_to_db['Date'] = df_to_db['Date'].dt.strftime('%Y-%m-%d')
                 df_to_db.insert(0, 'ticker', ticker)
                 all_records.extend(df_to_db.values.tolist())
         except Exception as e:
-            print(f"整理 {ticker} 下載資料時發生錯誤: {e}")
+            print(f"整理 {ticker} 錯誤: {e}")
             
     if all_records:
         cursor.executemany('''
@@ -230,74 +204,91 @@ def sync_daily_data(conn):
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', all_records)
         conn.commit()
-        print(f"✅ 成功將 {len(all_records)} 筆最新 K 線寫入資料庫！")
 
-    # 滾動瘦身
+    # I/O 優化：僅在每月 1 號進行 VACUUM 大掃除
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
     if cursor.rowcount > 0:
         conn.commit()
-        # 優化2：執行 VACUUM 真正釋放硬碟空間
-        conn.execute("VACUUM")
-        print(f"🧹 資料庫滾動瘦身完成，並已執行 VACUUM 釋放硬碟空間。")
+        if today.day == 1:
+            conn.execute("VACUUM")
+            print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 def run_0050_batch(conn):
-    strategy_version = "v02.4"
+    strategy_version = "v02.5"
     sync_daily_data(conn)
     
-    print(f"🚀 啟動 {strategy_version} 核心回測引擎 (讀取本地資料庫)...")
+    print(f"🚀 啟動 {strategy_version} 回測引擎...")
     
     all_trades = []
-    daily_alerts = []
+    alerts_trigger = []
+    alerts_watchlist = []
     cursor = conn.cursor()
     cursor.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
     conn.commit()
     
     for ticker in tw50_tickers:
         try:
-            # Bug修復1：加入 params=(ticker,) 確保 SQL 綁定正確
+            # Pandas 效能優化：原生 parse_dates 轉型
             df_full = pd.read_sql_query(
                 "SELECT Date, Open, High, Low, Close, Volume FROM daily_price WHERE ticker = ? ORDER BY Date", 
                 conn, 
-                params=(ticker,)
+                params=(ticker,),
+                parse_dates=['Date']
             )
             
             if len(df_full) < 120: continue
                 
-            trades, df_updated = calculate_v024_and_backtest(df_full, ticker, strategy_version)
+            trades, df_updated = calculate_v025_and_backtest(df_full, ticker, strategy_version)
             all_trades.extend(trades)
             
             latest_day = df_updated.iloc[-1]
             yesterday = df_updated.iloc[-2]
-            score = latest_day['Score']
-            score_delta = score - yesterday['Score']
             
-            # 問題5優化：Edge Trigger 邊緣觸發 (今日破45 且 昨日未滿45 才報警)
-            if pd.notna(score) and score >= 45 and yesterday['Score'] < 45:
-                daily_alerts.append(
-                    f"🎯 *{ticker}*\n"
-                    f"版號: {strategy_version}\n"
-                    f"評分: {int(score)} (變動: {int(score_delta):+d})\n"
-                    f"收盤: {latest_day['Close']:.2f} | 🛡️ MA20防守: {latest_day['MA20']:.2f}\n"
-                    f"⚡ 觸發價 (明日突破此價進場): {latest_day['High']:.2f}"
+            score_today = latest_day['Score']
+            score_yest = yesterday['Score']
+            
+            # 雙軌推播邏輯：
+            # 1. 突破進場 (Buy Stop)：昨日 >=45 (進入觀察區)，且今日高點突破昨日高點
+            is_trigger = (pd.notna(score_yest) and score_yest >= 45) and (latest_day['High'] >= yesterday['High'])
+            
+            # 2. 新增觀察 (Edge Trigger)：今日 >=45 且 昨日 <45
+            is_new_setup = (pd.notna(score_today) and score_today >= 45) and (pd.notna(score_yest) and score_yest < 45)
+            
+            if is_trigger:
+                alerts_trigger.append(
+                    f"🚀 *{ticker}* 突破進場!\n"
+                    f"成交價位: {latest_day['High']:.2f} (突破前高)\n"
+                    f"🛡️ 防守月線: {latest_day['MA20']:.2f}"
+                )
+            elif is_new_setup:
+                alerts_watchlist.append(
+                    f"👀 *{ticker}* 新增觀察\n"
+                    f"評分: {int(score_today)} | 收盤: {latest_day['Close']:.2f}\n"
+                    f"⚡ 待突破價位: {latest_day['High']:.2f}"
                 )
         except Exception as e:
-            print(f"執行 {ticker} 回測時發生錯誤: {e}")
+            print(f"回測 {ticker} 錯誤: {e}")
             
     if all_trades:
         cursor.executemany('''
             INSERT INTO backtest_trades 
-            (version, ticker, entry_date, exit_date, entry_price, exit_price, profit_pct, holding_bars, max_profit_pct, max_drawdown_pct, entry_score)
+            (version, ticker, entry_date, exit_date, entry_price, exit_price, profit_pct, holding_bars, max_profit_pct, trade_max_drawdown_pct, entry_score)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', all_trades)
         conn.commit()
-        print(f"✅ 回測完成，共寫入 {len(all_trades)} 筆實戰紀錄。")
     
-    if daily_alerts:
-        msg = f"🚀 *{strategy_version} 台股 50 強勢雷達* 🚀\n(邊緣觸發起漲警報)\n\n" + "\n\n".join(daily_alerts)
-    else:
-        msg = f"📊 *{strategy_version} 台股 50 雷達*\n今日無新增突破 >= 45 分的標的。"
-    send_telegram_alert(msg)
+    # 組合 Telegram 推播訊息
+    msg_parts = [f"📊 *{strategy_version} 台股 50 戰情室*"]
+    if alerts_trigger:
+        msg_parts.append("================\n🔥 **買進訊號觸發** 🔥\n" + "\n\n".join(alerts_trigger))
+    if alerts_watchlist:
+        msg_parts.append("================\n🎯 **潛力起漲觀察**\n" + "\n\n".join(alerts_watchlist))
+        
+    if not alerts_trigger and not alerts_watchlist:
+        msg_parts.append("\n今日盤後無新增訊號。")
+        
+    send_telegram_alert("\n\n".join(msg_parts))
 
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
