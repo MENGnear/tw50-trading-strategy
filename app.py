@@ -164,10 +164,19 @@ if not sub_trades.empty:
         ).sort_values('進場日期', ascending=False)
     else:
         # 舊版本相容顯示
-        show_trades = sub_trades[['entry_date', 'exit_date', 'entry_price', 'exit_price', 'profit_pct']].rename(
-            columns={'entry_date': '進場日期', 'exit_date': '出場日期', 'entry_price': '進場價', 'exit_price': '出場價', 'profit_pct': '最終報酬 (%)'}
-        ).sort_values('進場日期', ascending=False)
-    
+        st.dataframe(
+        show_trades.style
+        .format({
+            '進場價': '{:.2f}', 
+            '出場價': '{:.2f}',
+            '最大利潤 (%)': '{:.2f}',
+            '單筆MDD (%)': '{:.2f}',
+            '最終報酬 (%)': '{:.2f}'
+        })
+        .background_gradient(subset=['最終報酬 (%)'], cmap='RdYlGn', vmin=-10, vmax=30), 
+        use_container_width=True
+    )
+
     # 使用漸層色彩呈現報酬結果 (需搭配 matplotlib)
     st.dataframe(
         show_trades.style.background_gradient(subset=['最終報酬 (%)'], cmap='RdYlGn', vmin=-10, vmax=30), 
