@@ -9,6 +9,9 @@
 #  4. [效能D] Pandas 原生優化：以 parse_dates=['Date'] 取代 df 迴圈轉型，提升底層 C 語言讀取效能。
 # ==========================================================
 
+# ==========================================================
+# 1️⃣ 🚀 系統全域設定與套件匯入
+# ==========================================================
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -32,6 +35,9 @@ tw50_tickers = [
 
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
+# ==========================================================
+# 2️⃣ 📡 Telegram 警報推播模組
+# ==========================================================
 def send_telegram_alert(message):
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
@@ -47,6 +53,9 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"❌ Telegram 推播失敗: {e}")
 
+# ==========================================================
+# 3️⃣ 🗄️ SQLite 資料庫建置與連線模組
+# ==========================================================
 def init_db(db_name="tw50_strategy.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
@@ -69,6 +78,9 @@ def init_db(db_name="tw50_strategy.db"):
     conn.commit()
     return conn
 
+# ==========================================================
+# 4️⃣ 🧠 v02.5 核心評分與實戰回測引擎
+# ==========================================================
 def calculate_v025_and_backtest(df, ticker, strategy_version="v02.5"):
     # Date 已經在 read_sql_query 時透過 parse_dates 轉型
     df = df.sort_values('Date').dropna().reset_index(drop=True)
@@ -166,6 +178,9 @@ def calculate_v025_and_backtest(df, ticker, strategy_version="v02.5"):
         
     return trades, df
 
+# ==========================================================
+# 5️⃣ 🏭 智能增量更新與主程式
+# ==========================================================
 def sync_daily_data(conn):
     cursor = conn.cursor()
     today = datetime.datetime.now(TAIPEI_TZ)
