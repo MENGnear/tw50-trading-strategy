@@ -1,15 +1,23 @@
 # ==========================================================
-# 🚀 雲端量化排程檔：版次 v02.3 
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
+#  檔名：.github/workflows/daily_update.yml
+#  版次：v02.6 (回測精確對齊與 DBA 強制升級版)
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
+#  新增與優化：
+#  1. [權限A] 賦予 actions 機器人 contents: write 寫入權限。
+#  2. [Git機制B] 增加自動 commit 與 push 步驟，讓最新的 .db 覆蓋回 GitHub。
+#  3. [觸發C] 保留 workflow_dispatch 以便隨時手動喚醒測試。
 # ==========================================================
-name: 台股50 量化回測引擎 (v02.3)
+
+name: 台股50 量化回測引擎 (v02.6)
 
 on:
   schedule:
-    # 嚴格對齊台股盤後：台灣時間 15:00 = UTC 07:00 
-    # 僅於週一至週五 (1-5) 執行，避開六日休市干擾
+    # 台灣時間 15:00 = UTC 07:00 (避開六日休市)
     - cron: '0 7 * * 1-5'
-  workflow_dispatch: # 保留手動測試按鈕，方便隨時強制啟動
+  workflow_dispatch: 
 
+# 【關鍵修復】賦予寫入權限，否則無法將資料庫推回 GitHub
 permissions:
   contents: write
 
@@ -30,25 +38,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas numpy yfinance
           
-      - name: 🧠 執行 v02.3 策略運算與 Telegram 推播
+      - name: 🧠 執行 v02.6 策略運算與 Telegram 推播
         env:
-          # 授權 Python 開啟 GitHub 保險箱讀取推播金鑰
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
         
-      - name: 🗄️ 打包並上傳回測資料庫 (Artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          # 將打包下載的檔案加上版本號，方便未來管理
-          name: tw50-database-v02.3
-          path: tw50_strategy.db
-          retention-days: 7
-          
-      - name: 🔄 將最新資料庫推回 GitHub (讓網頁更新)
+      # 【關鍵修復】將算好的資料庫自動 Push 回 GitHub 儲存庫
+      - name: 🔄 將最新資料庫推回 GitHub (同步更新網頁端)
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add tw50_strategy.db
-          git commit -m "🤖 自動更新：每日回測資料庫" || echo "資料庫無變動"
+          # 如果沒有變動就不會 commit 報錯
+          git commit -m "🤖 自動更新：每日回測資料庫 (v02.6)" || echo "資料庫無變動"
           git push
+
+      - name: 🗄️ 打包備份回測資料庫 (供手動下載查驗)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tw50-database-v02.6
+          path: tw50_strategy.db
+          retention-days: 7
