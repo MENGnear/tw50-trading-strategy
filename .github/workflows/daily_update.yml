@@ -10,6 +10,9 @@ on:
     - cron: '0 7 * * 1-5'
   workflow_dispatch: # 保留手動測試按鈕，方便隨時強制啟動
 
+permissions:
+  contents: write
+
 jobs:
   run-strategy:
     runs-on: ubuntu-latest
@@ -41,3 +44,11 @@ jobs:
           name: tw50-database-v02.3
           path: tw50_strategy.db
           retention-days: 7
+          
+      - name: 🔄 將最新資料庫推回 GitHub (讓網頁更新)
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add tw50_strategy.db
+          git commit -m "🤖 自動更新：每日回測資料庫" || echo "資料庫無變動"
+          git push
