@@ -397,7 +397,7 @@ def sync_daily_data(conn):
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
     conn.commit()
     
-    # ====== Prt.15.3 Alert Log 保留五年 ======
+    # Alert Log 保留五年
     cursor.execute(
         '''
         DELETE FROM alert_log
@@ -408,7 +408,7 @@ def sync_daily_data(conn):
     conn.commit()
     
     # ==========================================================
-    # Prt.10 資料庫月保養 VACUUM
+    # 資料庫月保養 VACUUM
     # ==========================================================
 
     # 捨棄 rowcount，精確設定每月 1 號做月保養 VACUUM
@@ -470,16 +470,14 @@ def run_0050_batch(conn):
             is_setup_ready = (pd.notna(score_today) and score_today >= 45 and pd.notna(score_yesterday) and score_yesterday < 45)
             
             # ==================================================
-            # Prt.09.1
             # Telegram 與回測完全同步
             # ==================================================
-
             entered_latest_day_trades = [
                 t for t in trades
                 if t[2] == latest_trading_day
             ]
 
-            # ====== Prt.15.2 Trigger 去重複推播 ======
+            # Trigger 去重複推播
             if entered_latest_day_trades:
 
                 actual_entry_price = entered_latest_day_trades[-1][4]
@@ -557,34 +555,23 @@ def run_0050_batch(conn):
         ''', all_trades)
         conn.commit()
     
-# ==========================================================
-# Prt.14 戰情室推播整合
-# ==========================================================
+
     msg_parts = [f"📊 <b>{strategy_version} 台股 50 戰情室</b>"]
 
-    # ==========================================================
-    # Prt.14.1 Watchlist 區塊
-    # ==========================================================
+
     if alerts_setup:
         msg_parts.append("================\n🎯 <b>潛力起漲預告 (Watchlist)</b>\n" + "\n\n".join(alerts_setup))
 
-    # ==========================================================
-    # Prt.14.2 Trigger 區塊
-    # ==========================================================    
+ 
     if alerts_trigger:
         msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n\n".join(alerts_trigger))
 
-    # ==========================================================
-    # Prt.14.3 無訊號區塊
-    # ==========================================================        
+   
     if not alerts_trigger and not alerts_setup:
         msg_parts.append("\n盤後無新增訊號。")
         
     send_telegram_alert("\n\n".join(msg_parts))
 
-    # ==========================================================
-    # Prt.14.4 Telegram 發送
-    # ==========================================================   
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
     run_0050_batch(db_connection)
