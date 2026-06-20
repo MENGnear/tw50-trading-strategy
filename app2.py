@@ -179,9 +179,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     entry_idx = 0
     trade_max_drawdown = 0.0
     
-    # ==========================================================
-    # Prt.04 Edge Trigger 與 Setup 建立
-    # ==========================================================    
+# ==========================================================
+# Prt.04 Edge Trigger 與 Setup 建立
+# ==========================================================    
     setup_active = False
     signal_day_high = 0
     entry_score = 0
@@ -194,7 +194,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
 
         if not in_position:
 
-            # Prt.07.1 建立 Setup (只觸發一次)
+            # ==========================================================
+            # Prt.04.1 建立 Setup (只觸發一次)
+            # ==========================================================  
             if (
                 not setup_active
                 and today['Score'] >= 45
@@ -204,7 +206,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                 signal_day_high = today['High']
                 entry_score = today['Score']
 
-            # ====== Prt.07.2 Setup 等待突破機制（凍結版）======
+            # ==========================================================
+            # Prt.04.2 Setup 等待突破機制
+            # ========================================================== 
             if setup_active:
 
                 # Setup 失效條件：
