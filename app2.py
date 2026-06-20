@@ -22,7 +22,7 @@
 # ==========================================================
 
 # ==========================================================
-# 1️⃣ 🚀 系統全域設定與套件匯入
+# Prt.00 系統全域設定與套件匯入
 # ==========================================================
 import pandas as pd
 import numpy as np
@@ -49,7 +49,7 @@ tw50_tickers = [
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 # ==========================================================
-# 2️⃣ 📡 Telegram 警報推播模組
+# Prt.01 Telegram 警報推播模組
 # ==========================================================
 def send_telegram_alert(message):
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -76,13 +76,15 @@ def send_telegram_alert(message):
         print(f"❌ Telegram 推播失敗: {e}")
 
 # ==========================================================
-# 3️⃣ 🗄️ SQLite 資料庫初始化與無損升級 (Schema Migration)
+# Prt.02 SQLite 資料庫初始化與無損升級 (Schema Migration)
 # ==========================================================
 def init_db(db_name="tw50_strategy.db"):
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     
-    # 日線資料表
+    # ==========================================================
+    # Prt.02.1 建立 daily_price 資料表
+    # ==========================================================
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
             ticker TEXT, Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume INTEGER,
@@ -90,7 +92,9 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # 策略回測表
+    # ==========================================================
+    # Prt.02.2 建立 backtest_trades 資料表
+    # ==========================================================
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,7 +104,6 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # ====== Prt.15 Telegram 去重複推播紀錄 ======
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS alert_log (
             strategy_version TEXT,
@@ -114,7 +117,9 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # 使用 ALTER TABLE 優雅升級 Schema，絕對禁止 DROP TABLE
+    # ==========================================================
+    # Prt.02.3 Schema Migration (ALTER TABLE 升級)
+    # ==========================================================
     try:
         cursor.execute("ALTER TABLE backtest_trades ADD COLUMN trade_max_drawdown_pct REAL")
     except sqlite3.OperationalError:
@@ -125,23 +130,38 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==========================================================
-# 4️⃣ 🧠 V02.11F 核心算法與回測引擎
+# Prt.03 技術指標計算
 # ==========================================================
 def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     df = df.sort_values('Date').dropna().reset_index(drop=True)
-    
-    # 計算基礎技術指標
+
+    # ==========================================================
+    # Prt.03.1 MA20
+    # ==========================================================
     df['MA20'] = df['Close'].rolling(20).mean()
-    df['MA60'] = df['Close'].rolling(60).mean()
-    df['V_MA5'] = df['Volume'].rolling(5).mean()
     
+    # ==========================================================
+    # Prt.03.2 MA60
+    # ==========================================================   
+    df['MA60'] = df['Close'].rolling(60).mean()
+    
+    # ==========================================================
+    # Prt.03.3 V_MA5
+    # ==========================================================  
+    df['V_MA5'] = df['Volume'].rolling(5).mean()
+
+    # ==========================================================
+    # Prt.03.4 MACD
+    # ==========================================================      
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # 評分系統
+    # ==========================================================
+    # Prt.03.5 Score 評分系統
+    # ==========================================================   
     t1 = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
     m1 = (df['Close'] > df['MA20']).astype(int) * 10                    
     m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
@@ -159,7 +179,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     entry_idx = 0
     trade_max_drawdown = 0.0
     
-    # ====== Prt.07 Edge Trigger + Buy Stop 等待機制 ======
+    # ==========================================================
+    # Prt.04 Edge Trigger 與 Setup 建立
+    # ==========================================================    
     setup_active = False
     signal_day_high = 0
     entry_score = 0
