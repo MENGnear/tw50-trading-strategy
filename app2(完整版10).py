@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.11F
+# 策略版本 : v02.12
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -245,7 +245,7 @@ def init_db(db_name="tw50_strategy.db"):
 #
 # ==============================
 
-def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):  
+def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.12"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
     # ==============================
@@ -796,7 +796,7 @@ def sync_daily_data(conn):
 
 def run_0050_batch(conn):
 
-    strategy_version = "v02.11F"
+    strategy_version = "v02.12"
 
     print("=" * 60)
     print(f"Strategy Version : {strategy_version}")
