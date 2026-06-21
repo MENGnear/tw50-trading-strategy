@@ -1,29 +1,49 @@
-# ==========================================================
+# ==============================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-#  檔名：main.py
-#  版次：v02.11F (極致嚴謹強固版)
+# 專案名稱 : TW50 Breakout Strategy
+# 檔案名稱 : main.py
+# 策略版本 : v02.11F
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-#  新增與優化：
-#  1. [防護A] 採用 ALTER TABLE 與 try-except 優雅升級資料庫，嚴禁 DROP TABLE (Prt.01)。
-#  2. [強固B] Telegram parse_mode 嚴格鎖定 HTML，避開特殊字元造成的 400 錯誤 (Prt.02)。
-#  3. [資源C] 捨棄 rowcount，改採每月 1 號固定執行 VACUUM 保養資料庫 (Prt.03)。
-#  4. [語意D] 全面導入 latest_trading_day 命名，消除假日執行的時間錯覺 (Prt.04)。
-#  5. [實戰E] 導入 Buy Stop 真實成交模型：max(tomorrow['Open'], signal_day_high) (Prt.05)。
-#  6. [數據F] MDD 直接以百分比 (trade_max_drawdown_pct) 存入資料庫 (Prt.06)。
-#  7. [訊號G] 導入 Edge Trigger 邊緣觸發 (今日 >= 45 且昨日 < 45)，淨化回測標籤 (Prt.07)。
-#  8. [突破H] Buy Stop 嚴格定義為 `>` (大於)，過濾雙頂測試的假突破 (Prt.08)。
-#  9. [戰情I] 採用雙層推播架構：第一層 Watchlist 預告，第二層 Trigger 執行回報 (Prt.09)。
-# 10. [即時J] Telegram 與回測完全同步，退回 trades 比對判斷邏輯 (Prt.09.1) (v02.11A)。
-# 11. [排版K] 停損與 MDD 紀錄區塊垂直排版優化，提升可讀性 (v02.11B)。
-# 12. [排版L] 月線跌破出場與期末強制平倉區塊垂直排版優化，全面統一風格 (v02.11C)。
-# 13. [防護M] SQLite VACUUM 執行前強制 commit，確保非 Transaction 狀態 (Prt.03) (v02.11D)。
-# 14. [精準N] 修正進場日防守月線抓取邏輯，確保精確對應進場當日 MA20 (v02.11E)。
-# 15. [效能O] 優化 DataFrame 查詢效能 (Prt.14.1) 並新增 Alert Log 去重複推播機制 (Prt.15) (v02.11F)。
-# ==========================================================
+# 功能說明：
+# 1. 台股50成分股歷史資料同步
+# 2. 技術指標計算 (MA、MACD)
+# 3. Breakout Strategy 回測
+# 4. SQLite 資料儲存與管理
+# 5. Telegram 即時訊號通知
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
+# 主要策略：
+# - Score >= 45 建立 Setup
+# - Buy Stop 突破進場
+# - 固定停損 8%
+# - 跌破 MA20 出場
+# - 回測結束強制平倉
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
+# ==============================
 
-# ==========================================================
+# ==============================
+# 章節索引
+# ==============================
+# Prt.00 系統設定與套件匯入
+# Prt.01 Telegram通知模組
+# Prt.02 SQLite資料庫管理
+# Prt.03 技術指標計算
+# Prt.04 訊號評分系統
+# Prt.05 Setup與進場邏輯
+# Prt.06 持倉管理與出場邏輯
+# Prt.07 資料同步模組
+# Prt.08 回測主控引擎
+# Prt.09 個股回測流程
+# Prt.10 訊號判斷
+# Prt.11 Trigger推播
+# Prt.12 Watchlist推播
+# Prt.13 回測結果寫入
+# Prt.14 Telegram訊息組裝
+# Prt.15 主程式入口
+# ==============================
+
+# ==============================
 # Prt.00 系統全域設定與套件匯入
-# ==========================================================
+# ==============================
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -33,7 +53,17 @@ import os
 import urllib.request
 import json
 
-# 台股 50 成分股清單
+# ==============================
+# 台灣50成分股清單
+# ==============================
+# 資料來源：
+# - Yahoo Finance
+# 格式：
+# - 股票代碼.TW
+# 用途：
+# - 回測與每日訊號掃描標的池
+# ==============================
+
 tw50_tickers = [
     '2330.TW', '2454.TW', '2303.TW', '3711.TW', '3034.TW', '2379.TW',
     '2317.TW', '2308.TW', '2382.TW', '3231.TW', '2324.TW', '2357.TW', 
@@ -49,9 +79,25 @@ tw50_tickers = [
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 # ==========================================================
-# Prt.01 Telegram 警報推播模組
+# Prt.01 Telegram 通知模組
 # ==========================================================
+
 def send_telegram_alert(message):
+    
+    """
+    功能：
+        發送 Telegram 推播通知
+    參數：
+        message : str
+            HTML格式訊息內容
+    注意：
+        parse_mode固定使用HTML
+        避免Markdown特殊字元造成推播失敗
+    環境變數：
+        TELEGRAM_TOKEN
+        TELEGRAM_CHAT_ID
+    """
+    
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
@@ -60,8 +106,7 @@ def send_telegram_alert(message):
         return
         
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    
-    # 嚴格綁定 parse_mode="HTML"，避免 Markdown 解析 .TW 或 _ 造成推播失敗
+
     data = json.dumps({
         "chat_id": chat_id, 
         "text": message, 
@@ -75,16 +120,46 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"❌ Telegram 推播失敗: {e}")
 
-# ==========================================================
-# Prt.02 SQLite 資料庫初始化與無損升級 (Schema Migration)
-# ==========================================================
+# ==============================
+# Prt.02 SQLite 資料庫管理
+# ==============================
+
 def init_db(db_name="tw50_strategy.db"):
+    
+    """
+    功能：
+        初始化SQLite資料庫
+    建立資料表：
+        daily_price
+        backtest_trades
+        alert_log
+    升級方式：
+        ALTER TABLE
+    原則：
+        禁止DROP TABLE
+        確保歷史資料不遺失
+    回傳：
+        sqlite connection
+    """
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
     
-    # ==========================================================
+    # ==============================
     # Prt.02.1 建立 daily_price 資料表
-    # ==========================================================
+    # ==============================
+    # Table : daily_price
+    # ==============================
+    # ticker    股票代號
+    # Date      交易日期
+    # Open      開盤價
+    # High      最高價
+    # Low       最低價
+    # Close     收盤價
+    # Volume    成交量
+    # Primary Key：
+    # - (ticker, Date)
+    # ==============================
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
             ticker TEXT, Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume INTEGER,
@@ -92,9 +167,26 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # ==========================================================
+    # ==============================
     # Prt.02.2 建立 backtest_trades 資料表
-    # ==========================================================
+    # ==============================
+    # Table : backtest_trades
+    # ==============================
+    # version
+    # ticker
+    # entry_date
+    # exit_date
+    # entry_price
+    # exit_price
+    # profit_pct
+    # holding_bars
+    # max_profit_pct
+    # trade_max_drawdown_pct
+    # entry_score
+    # 用途：
+    # - 儲存所有歷史回測交易紀錄
+    # ================================
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,9 +196,10 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
 
-    # ==========================================================
+    # ==============================
     # Prt.02.3 建立 alert_log
-    # ==========================================================
+    # ==============================
+    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS alert_log (
             strategy_version TEXT,
@@ -120,9 +213,9 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # ==========================================================
+    # ==============================
     # Prt.02.4 Schema Migration (ALTER TABLE 升級)
-    # ==========================================================
+    # ==============================
     try:
         cursor.execute("ALTER TABLE backtest_trades ADD COLUMN trade_max_drawdown_pct REAL")
     except sqlite3.OperationalError:
@@ -132,9 +225,10 @@ def init_db(db_name="tw50_strategy.db"):
     conn.commit()
     return conn
 
-# ==========================================================
+# ==============================
 # Prt.03 技術指標與評分系統
-# ==========================================================
+    # ==============================
+
 def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
