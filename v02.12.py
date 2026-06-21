@@ -245,7 +245,7 @@ def init_db(db_name="tw50_strategy.db"):
 #
 # ==============================
 
-def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.12"):  
+def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
     # ==============================
