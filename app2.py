@@ -103,7 +103,10 @@ def init_db(db_name="tw50_strategy.db"):
             holding_bars INTEGER, max_profit_pct REAL, entry_score REAL
         )
     ''')
-    
+
+    # ==========================================================
+    # Prt.02.3 建立 alert_log
+    # ==========================================================
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS alert_log (
             strategy_version TEXT,
@@ -118,7 +121,7 @@ def init_db(db_name="tw50_strategy.db"):
     ''')
     
     # ==========================================================
-    # Prt.02.3 Schema Migration (ALTER TABLE 升級)
+    # Prt.02.4 Schema Migration (ALTER TABLE 升級)
     # ==========================================================
     try:
         cursor.execute("ALTER TABLE backtest_trades ADD COLUMN trade_max_drawdown_pct REAL")
@@ -211,12 +214,12 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
             # ========================================================== 
             if setup_active:
 
-                # Setup 失效條件：
-                # 一旦評分跌破 45 分，取消等待
                 if today['Score'] < 45:
                     setup_active = False
 
-                # Buy Stop 突破進場
+            # ==========================================================
+            # Prt.04.3 Buy Stop 突破進場
+            # ========================================================== 
                 elif tomorrow['High'] > signal_day_high:
 
                     in_position = True
@@ -231,21 +234,36 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                     entry_idx = i + 1
                     peak_price = entry_price
                     trade_max_drawdown = 0.0
+
+# ==========================================================
+# Prt.05 持倉管理
+# ==========================================================      
         else:
 
+            # ==========================================================
+            # Prt.05.1 更新 Peak Price
+            # ==========================================================
             peak_price = max(
                 peak_price,
                 tomorrow['High']
             )
 
+            # ==========================================================
+            # Prt.05.2 更新 MOD
+            # ==========================================================
             trade_max_drawdown = min(
                 trade_max_drawdown,
                 (tomorrow['Low'] - peak_price) / peak_price
             )
 
-            # 停損線為進場價的 8%
+            # ==========================================================
+            # Prt.05.3 停損設定 8%
+            # ==========================================================
             stop_loss_price = entry_price * 0.92
 
+            # ==========================================================
+            # Prt.05.4 停損檢查
+            # ==========================================================
             if tomorrow['Low'] <= stop_loss_price:
 
                 exit_price = min(
@@ -269,7 +287,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                 trade_max_drawdown_pct = (
                     trade_max_drawdown * 100
                 )
-
+            # ==========================================================
+            # Prt.05.5 停損出場紀錄
+            # ==========================================================
                 trades.append(
                     (
                         strategy_version,
@@ -287,7 +307,10 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                 )
 
                 in_position = False
-                
+
+            # ==========================================================
+            # Prt.05.6 跌破月線出場
+            # ==========================================================
             elif tomorrow['Close'] < tomorrow['MA20']:
                 if i+2 < len(df):
                     next_day = df.iloc[i+2]
@@ -319,7 +342,9 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                     )
                     in_position = False
                     
-    # 處理回測期末的未平倉部位
+# ==========================================================
+# Prt.06 期末強制平倉
+# ==========================================================
     if in_position:
         last_day = df.iloc[-1]
         exit_price = last_day['Close']
@@ -352,7 +377,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     return trades, df
 
 # ==========================================================
-# Prt.09 智能增量資料更新
+# Prt.07 智能增量資料更新
 # ==========================================================
 def sync_daily_data(conn):
     cursor = conn.cursor()
@@ -360,7 +385,10 @@ def sync_daily_data(conn):
     
     cursor.execute("SELECT MAX(Date) FROM daily_price")
     last_date = cursor.fetchone()[0]
-    
+            
+    # ==========================================================
+    # Prt.07.1 判斷增量更新區間
+    # ==========================================================    
     if last_date:
         start_date_obj = datetime.datetime.strptime(last_date, '%Y-%m-%d') - datetime.timedelta(days=2)
         start_date = start_date_obj.strftime('%Y-%m-%d')
@@ -369,6 +397,9 @@ def sync_daily_data(conn):
         start_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
         print(f"⚠️ 初次下載，抓取區間: {start_date} 至今...")
 
+    # ==========================================================
+    # Prt.07.2 下載 Yahoo 資料
+    # ==========================================================  
     end_date = (today + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
     raw_data = yf.download(tw50_tickers, start=start_date, end=end_date, group_by='ticker', progress=False, threads=False)
     
