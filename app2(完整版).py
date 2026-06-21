@@ -133,7 +133,7 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==========================================================
-# Prt.03 技術指標計算
+# Prt.03 技術指標與評分系統
 # ==========================================================
 def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     df = df.sort_values('Date').dropna().reset_index(drop=True)
@@ -183,7 +183,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
     trade_max_drawdown = 0.0
     
 # ==========================================================
-# Prt.04 Edge Trigger 與 Setup 建立
+# Prt.04 Setup 與進場邏輯
 # ==========================================================    
     setup_active = False
     signal_day_high = 0
@@ -198,7 +198,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
         if not in_position:
 
             # ==========================================================
-            # Prt.04.1 建立 Setup (只觸發一次)
+            # Prt.04.1 建立 Setup
             # ==========================================================  
             if (
                 not setup_active
@@ -210,7 +210,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                 entry_score = today['Score']
 
             # ==========================================================
-            # Prt.04.2 Setup 等待突破機制
+            # Prt.04.2 Setup 等待突破
             # ========================================================== 
             if setup_active:
 
@@ -236,7 +236,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                     trade_max_drawdown = 0.0
 
 # ==========================================================
-# Prt.05 持倉管理
+# Prt.05 持倉管理系統
 # ==========================================================      
         else:
 
@@ -249,7 +249,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
             )
 
             # ==========================================================
-            # Prt.05.2 更新 MOD
+            # Prt.05.2 更新 MDD
             # ==========================================================
             trade_max_drawdown = min(
                 trade_max_drawdown,
@@ -309,7 +309,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                 in_position = False
 
             # ==========================================================
-            # Prt.05.6 跌破月線出場
+            # Prt.05.6 月線跌破出場
             # ==========================================================
             elif tomorrow['Close'] < tomorrow['MA20']:
                 if i+2 < len(df):
@@ -343,7 +343,7 @@ def calculate_v0211F_and_backtest(df, ticker, strategy_version="v02.11F"):
                     in_position = False
                     
 # ==========================================================
-# Prt.06 期末強制平倉
+# Prt.06 回測期末強制平倉
 # ==========================================================
     if in_position:
         last_day = df.iloc[-1]
@@ -418,6 +418,10 @@ def sync_daily_data(conn):
             print(f"整理 {ticker} 錯誤: {e}")
             
     if all_records:
+
+    # ==========================================================
+    # Prt.07.3 寫入 SQLite
+    # ==========================================================
         cursor.executemany('''
             INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -425,12 +429,19 @@ def sync_daily_data(conn):
         conn.commit()
 
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
+
+    # ==========================================================
+    # Prt.07.4 清除五年前資料
+    # ==========================================================
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
     conn.commit()
     
-    # Alert Log 保留五年
     cursor.execute(
         '''
+
+    # ==========================================================
+    # Prt.07.5 Alert Log 保留五年
+    # ==========================================================
         DELETE FROM alert_log
         WHERE entry_date < ?
         ''',
@@ -439,10 +450,8 @@ def sync_daily_data(conn):
     conn.commit()
     
     # ==========================================================
-    # 資料庫月保養 VACUUM
+    # Prt.07.6 SQLite VACUUM 月保養
     # ==========================================================
-
-    # 捨棄 rowcount，精確設定每月 1 號做月保養 VACUUM
     if today.day == 1:
 
         # 確保不存在未完成交易
@@ -457,8 +466,15 @@ def sync_daily_data(conn):
             "已執行 VACUUM 釋放硬碟空間。"
         )
 
+# ==========================================================
+# Prt.08 回測主控引擎
+# ==========================================================
 def run_0050_batch(conn):
     strategy_version = "v02.11F"
+    
+    # ==========================================================
+    # Prt.08.1 同步資料庫
+    # ==========================================================
     sync_daily_data(conn)
     
     print(f"🚀 啟動 {strategy_version} 回測引擎...")
@@ -468,14 +484,24 @@ def run_0050_batch(conn):
     alerts_trigger = []
     
     cursor = conn.cursor()
-    # ====== Prt.15.1 Alert Log ======
+
     alert_cursor = conn.cursor()
     
+    # ==========================================================
+    # Prt.08.2 清除本版回測資料
+    # ==========================================================
     cursor.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
     conn.commit()
-    
+
+# ==========================================================
+# Prt.09 個股回測流程
+# ==========================================================    
     for ticker in tw50_tickers:
         try:
+
+            # ==========================================================
+            # Prt.09.1
+            # ========================================================== 
             df_full = pd.read_sql_query(
                 "SELECT Date, Open, High, Low, Close, Volume FROM daily_price WHERE ticker = ? ORDER BY Date", 
                 conn, 
@@ -485,9 +511,15 @@ def run_0050_batch(conn):
             
             if len(df_full) < 65: continue
                 
+            # ==========================================================
+            # Prt.09.2
+            # ==========================================================     
             trades, df_updated = calculate_v0211F_and_backtest(df_full, ticker, strategy_version)
             all_trades.extend(trades)
-            
+
+            # ==========================================================
+            # Prt.09.3
+            # ========================================================== 
             latest_day = df_updated.iloc[-1]
             yesterday_day = df_updated.iloc[-2]
             
@@ -495,20 +527,30 @@ def run_0050_batch(conn):
             score_yesterday = yesterday_day['Score']
             
             # 語意正名：精準使用 latest_trading_day 消滅時間錯覺
+# ==========================================================
+# Prt.10 訊號判斷
+# ==========================================================             
             latest_trading_day = latest_day['Date'].strftime('%Y-%m-%d')
             
-            # 推播用的 Edge Trigger 判斷
+            # ==========================================================
+            # Prt.10.1
+            # ========================================================== 
             is_setup_ready = (pd.notna(score_today) and score_today >= 45 and pd.notna(score_yesterday) and score_yesterday < 45)
             
-            # ==================================================
-            # Telegram 與回測完全同步
-            # ==================================================
+            # ==========================================================
+            # Prt.10.2
+            # ==========================================================
             entered_latest_day_trades = [
                 t for t in trades
                 if t[2] == latest_trading_day
             ]
 
-            # Trigger 去重複推播
+# ==========================================================
+# Prt.11 Trigger 推播
+# ==========================================================
+            # ==========================================================
+            # Prt.11.1
+            # ==========================================================
             if entered_latest_day_trades:
 
                 actual_entry_price = entered_latest_day_trades[-1][4]
@@ -522,7 +564,10 @@ def run_0050_batch(conn):
                     if not entry_row.empty
                     else latest_day['MA20']
                 )
-
+           
+            # ==========================================================
+            # Prt.11.2
+            # ==========================================================
                 alert_cursor.execute(
                     '''
                     SELECT 1
@@ -542,12 +587,18 @@ def run_0050_batch(conn):
 
                 if not already_sent:
 
+            # ==========================================================
+            # Prt.11.3
+            # ==========================================================
                     alerts_trigger.append(
                         f"✅ <b>{ticker}</b> 今日突破進場\n"
                         f"成交價 <b>{actual_entry_price:.2f}</b>\n"
                         f"防守月線 <b>{entry_ma20:.2f}</b>"
                     )
 
+            # ==========================================================
+            # Prt.11.4
+            # ==========================================================
                     alert_cursor.execute(
                         '''
                         INSERT OR IGNORE INTO alert_log
@@ -567,6 +618,9 @@ def run_0050_batch(conn):
 
                     conn.commit()
 
+# ==========================================================
+# Prt.12 Watchlist 預告推播
+# ==========================================================
             elif is_setup_ready:
 
                 alerts_setup.append(
@@ -577,7 +631,10 @@ def run_0050_batch(conn):
                 
         except Exception as e:
             print(f"回測 {ticker} 錯誤: {e}")
-            
+
+# ==========================================================
+# Prt.13 回測結果寫入 SQLite
+# ==========================================================          
     if all_trades:
         cursor.executemany('''
             INSERT INTO backtest_trades 
@@ -585,8 +642,10 @@ def run_0050_batch(conn):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', all_trades)
         conn.commit()
-    
 
+# ==========================================================
+# Prt.14 Telegram 戰情室訊息組裝
+# ==========================================================    
     msg_parts = [f"📊 <b>{strategy_version} 台股 50 戰情室</b>"]
 
 
