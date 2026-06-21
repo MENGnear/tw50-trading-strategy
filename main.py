@@ -742,10 +742,15 @@ def sync_daily_data(conn):
         # 2. 存入 CSV (這是給 app_v02_10.py 讀取的接口)
         final_df.to_csv("temp_data.csv", index=False)
         print("✅ 數據已成功導出至 temp_data.csv")
-        
-        # 3. 原本的資料庫儲存邏輯 (保持不變)
-        # db.insert_many(...)
-
+        # 3. 資料庫儲存邏輯 (加上 try-except 保護)
+    
+        try:
+            # 3. 原本的資料庫儲存邏輯 (保持不變)
+            # db.insert_many(...)
+                pass 
+        except Exception as e:
+            print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
+            
     # ==============================
     # Prt.06.3 寫入 SQLite
     # ==============================
