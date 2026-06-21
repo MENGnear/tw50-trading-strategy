@@ -736,6 +736,15 @@ def sync_daily_data(conn):
             print(f"整理 {ticker} 錯誤: {e}")
             
     if all_records:
+        # 1. 轉為 DataFrame 方便儲存
+        final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        
+        # 2. 存入 CSV (這是給 app_v02_10.py 讀取的接口)
+        final_df.to_csv("temp_data.csv", index=False)
+        print("✅ 數據已成功導出至 temp_data.csv")
+        
+        # 3. 原本的資料庫儲存邏輯 (保持不變)
+        # db.insert_many(...)
 
     # ==============================
     # Prt.06.3 寫入 SQLite
