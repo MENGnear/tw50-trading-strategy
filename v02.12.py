@@ -388,6 +388,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):
             # 取消本次 Setup
             #
             # ==============================
+            
             if setup_active:
 
                 if today['Score'] < 45:
@@ -403,8 +404,8 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):
             # 視為正式買進
             #
             # ============================== 
+                
                 elif tomorrow['High'] > signal_day_high:
-
                     in_position = True
                     setup_active = False
 
