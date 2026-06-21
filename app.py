@@ -1,25 +1,60 @@
 import pandas as pd
 import sys
-
-# 嘗試靜態載入 main
-try:
-    import main
-except ImportError:
-    print("❌ 無法載入 main.py，請確認檔案名稱是否正確且位於同一路徑")
-    sys.exit(1)
+import main  # 這會觸發 main.py 的初始化
 
 def run_poc_state_machine():
-    print("🚀 啟動 v02.10 攔截運算...")
+    print("🚀 啟動 v02.10 POC 狀態機...")
     
-    # 檢查目標變數，如果 main.py 內部變數是區域變數，請在 main.py 底部增加：
-    # global stock_data 
-    # stock_data = your_dataframe_name
+    # --- 1. 自動尋找目標數據集 ---
+    # 如果變數是全域的，直接取用；如果是函數內部的，可能需要調整 main.py
+    # 這裡我們嘗試尋找常見的命名
+    target_df = None
+    possible_names = ['stock_data', 'df_history', 'all_data', 'df']
     
-    target_df = getattr(main, 'stock_data', None)
-    
+    for name in possible_names:
+        if hasattr(main, name):
+            target_df = getattr(main, name)
+            print(f"✅ 成功找到數據變數: {name}")
+            break
+            
     if target_df is None:
-        print("❌ 錯誤：在 main.py 中找不到 'stock_data' 變數。")
-        print(f"現有屬性: {dir(main)}") # 除錯用：顯示 main 中所有的變數名稱
+        print("❌ 錯誤：無法在 main.py 中找到資料變數。")
+        print(f"當前可用變數: {[attr for attr in dir(main) if not attr.startswith('__')]}")
         return
 
-    # ... 後續邏輯 ...
+    # --- 2. 狀態機核心邏輯 ---
+    setup_active = False
+    signal_day_high = 0.0
+    entry_score = 0.0
+    alerts = []
+    in_position = False
+
+    for index, row in target_df.iterrows():
+        # 確保 DataFrame 欄位名稱與此處一致
+        today_score = row.get('Score', 0)
+        today_high = row.get('High', 0)
+        
+        # Setup 偵測
+        if not setup_active and not in_position and today_score >= 45:
+            setup_active = True
+            signal_day_high = today_high
+            entry_score = today_score
+            alerts.append(f"🎯 [Setup] 觸發：分數 {entry_score:.2f} (突破點: {signal_day_high})")
+            continue
+            
+        # Trigger 偵測
+        if setup_active and today_high > signal_day_high:
+            in_position = True
+            setup_active = False
+            alerts.append(f"🔥 [Trigger] 突破進場：成交價 {today_high} > 突破點 {signal_day_high}")
+
+    # --- 3. 輸出結果 ---
+    print("\n--- 運算結果摘要 ---")
+    if not alerts:
+        print("沒有觸發任何訊號。")
+    else:
+        for alert in alerts:
+            print(alert)
+
+if __name__ == "__main__":
+    run_poc_state_machine()
