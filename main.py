@@ -734,7 +734,23 @@ def sync_daily_data(conn):
                 all_records.extend(df_to_db.values.tolist())
         except Exception as e:
             print(f"整理 {ticker} 錯誤: {e}")
-            
+
+    if not all_records:
+        print("⚠️ 警告：all_records 為空，嘗試手動轉存 raw_data...")
+        # 這裡簡單備份一份原始下載資料，確保你有檔案可以測試
+        raw_data.to_csv("temp_data.csv") 
+    else:
+        final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        final_df.to_csv("temp_data.csv", index=False)
+        print("✅ 數據已成功導出至 temp_data.csv")
+    
+    # 原本的資料庫操作維持你的 try-except 保護
+    try:
+        # db.insert_many(...)
+        pass
+    except Exception as e:
+        print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
+
     if all_records:
         # 1. 轉為 DataFrame 方便儲存
         final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
