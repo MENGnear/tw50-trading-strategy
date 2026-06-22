@@ -758,21 +758,26 @@ def sync_daily_data(conn):
     except Exception as e:
         print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
 
+# === 確保資料處理完畢後，強制導出 CSV ===
     if all_records:
-        # 1. 轉為 DataFrame 方便儲存
         final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        
-        # 2. 存入 CSV (這是給 app_v02_10.py 讀取的接口)
         final_df.to_csv("temp_data.csv", index=False)
-        print("✅ 數據已成功導出至 temp_data.csv")
-        # 3. 資料庫儲存邏輯 (加上 try-except 保護)
-    
-        try:
-            # 3. 原本的資料庫儲存邏輯 (保持不變)
-            # db.insert_many(...)
-                pass 
-        except Exception as e:
-            print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
+        print("✅ 數據已強制導出至 temp_data.csv，準備執行狀態機。")
+    else:
+        print("❌ 錯誤：all_records 為空，未抓取到任何資料。請檢查 tw50_tickers 下載是否成功。")
+
+    # === 將資料庫寫入邏輯完全隔離，使其無法中斷程式 ===
+    print("--- 執行資料庫寫入嘗試 ---")
+    try:
+        # 這裡放入你原本的資料庫寫入邏輯
+        # 如果這裡崩潰，程式會跳到 except，但不會影響上面已經存好的 CSV
+        pass 
+    except Exception as e:
+        print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
+
+    # === 最後印出結果 ===
+    print("--- 讀取回測績效前 5 名的交易 ---")
+    # (保持你原本後續的輸出邏輯)
             
     # ==============================
     # Prt.06.3 寫入 SQLite
