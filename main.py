@@ -741,36 +741,21 @@ def sync_daily_data(conn):
                 print(f"❌ {ticker} 不在 raw_data 中。")
         except Exception as e:
             print(f"❌ 整理 {ticker} 錯誤: {e}")
-    
-    if not all_records:
-        print("⚠️ 警告：all_records 為空，嘗試手動轉存 raw_data...")
-        # 這裡簡單備份一份原始下載資料，確保你有檔案可以測試
-        raw_data.to_csv("temp_data.csv") 
-    else:
-        final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        final_df.to_csv("temp_data.csv", index=False)
-        print("✅ 數據已成功導出至 temp_data.csv")
-    
-    # 原本的資料庫操作維持你的 try-except 保護
-    try:
-        # db.insert_many(...)
-        pass
-    except Exception as e:
-        print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
 
-# === 確保資料處理完畢後，強制導出 CSV ===
+    # === 確保資料處理完畢後，強制導出 CSV ===
     if all_records:
         final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
         final_df.to_csv("temp_data.csv", index=False)
         print("✅ 數據已強制導出至 temp_data.csv，準備執行狀態機。")
     else:
-        print("❌ 錯誤：all_records 為空，未抓取到任何資料。請檢查 tw50_tickers 下載是否成功。")
+        print("❌ 錯誤：all_records 為空，嘗試手動轉存 raw_data...")
+        # 簡單備份一份原始下載資料，確保有檔案可以測試
+        raw_data.to_csv("temp_data.csv") 
 
     # === 將資料庫寫入邏輯完全隔離，使其無法中斷程式 ===
     print("--- 執行資料庫寫入嘗試 ---")
     try:
-        # 這裡放入你原本的資料庫寫入邏輯
-        # 如果這裡崩潰，程式會跳到 except，但不會影響上面已經存好的 CSV
+        # 這裡放入你原本的資料庫寫入邏輯 (例如 db.insert_many...)
         pass 
     except Exception as e:
         print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
@@ -778,7 +763,7 @@ def sync_daily_data(conn):
     # === 最後印出結果 ===
     print("--- 讀取回測績效前 5 名的交易 ---")
     # (保持你原本後續的輸出邏輯)
-            
+    
     # ==============================
     # Prt.06.3 寫入 SQLite
     # ==============================
