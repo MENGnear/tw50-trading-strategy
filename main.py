@@ -720,7 +720,7 @@ def sync_daily_data(conn):
     # ==============================
     end_date = (today + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
     raw_data = yf.download(tw50_tickers, start=start_date, end=end_date, group_by='ticker', progress=False, threads=False)
-    
+
     all_records = []
     for ticker in tw50_tickers:
         try:
@@ -733,14 +733,16 @@ def sync_daily_data(conn):
                 df = stock_data.reset_index()
                 # 這裡檢查一下欄位名稱是否正確
                 print(f"✅ {ticker} 抓取成功，共有 {len(df)} 筆資料。")
-
+                
                 df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
                 
+                # ==========================================
+                # 👇 就是這行關鍵！將 Timestamp 轉成字串格式
+                # ==========================================
                 df_to_db['Date'] = pd.to_datetime(df_to_db['Date']).dt.strftime('%Y-%m-%d')
                 
                 df_to_db.insert(0, 'ticker', ticker)
                 all_records.extend(df_to_db.values.tolist())
-
             else:
                 print(f"❌ {ticker} 不在 raw_data 中。")
         except Exception as e:
