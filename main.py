@@ -726,15 +726,22 @@ def sync_daily_data(conn):
         try:
             if ticker in raw_data:
                 stock_data = raw_data[ticker].dropna(how='all').copy()
-                if stock_data.empty: continue
+                if stock_data.empty: 
+                    print(f"⚠️ {ticker} 資料為空，跳過。")
+                    continue
+                
                 df = stock_data.reset_index()
+                # 這裡檢查一下欄位名稱是否正確
+                print(f"✅ {ticker} 抓取成功，共有 {len(df)} 筆資料。")
+                
                 df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
-                df_to_db['Date'] = df_to_db['Date'].dt.strftime('%Y-%m-%d')
                 df_to_db.insert(0, 'ticker', ticker)
                 all_records.extend(df_to_db.values.tolist())
+            else:
+                print(f"❌ {ticker} 不在 raw_data 中。")
         except Exception as e:
-            print(f"整理 {ticker} 錯誤: {e}")
-
+            print(f"❌ 整理 {ticker} 錯誤: {e}")
+    
     if not all_records:
         print("⚠️ 警告：all_records 為空，嘗試手動轉存 raw_data...")
         # 這裡簡單備份一份原始下載資料，確保你有檔案可以測試
