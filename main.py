@@ -771,11 +771,13 @@ def sync_daily_data(conn):
     # 將下載結果存入 daily_price
     #
     # ==============================
-        cursor.executemany('''
-            INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', all_records)
-        conn.commit()
+    
+    # 【修正重點：這裡原本多縮排了4個空白，已幫你退回對齊主線】
+    cursor.executemany('''
+        INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ''', all_records)
+    conn.commit()
 
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
 
