@@ -887,7 +887,7 @@ def run_0050_batch(conn):
             # ==============================
             # Prt.08.2 執行策略回測
             # ==============================
-            trades, df_updated = calculate_v0211F_and_backtest(df_full, ticker, strategy_version)
+            trades, df_updated = calculate_v0212_and_backtest(df_full, ticker, strategy_version)
             all_trades.extend(trades)
 
             # ==============================
