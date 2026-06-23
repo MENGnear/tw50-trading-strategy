@@ -281,15 +281,7 @@ def main():
             rsi_status = "📈 多頭漲多拉回 (良性修正)"
             alert_html = f'<div class="alert-box" style="color: #58a6ff;">{rsi_status}</div>'
             
-        card = f'''
-            <div class="stock-card">
-                <div>
-                    <div class="stock-title">{ticker}</div>
-                    <div class="stock-price">{price:.2f}</div>
-                </div>
-                {alert_html}
-            </div>
-        '''
+        card = f'<div class="stock-card"><div><div class="stock-title">{ticker}</div><div class="stock-price">{price:.2f}</div></div>{alert_html}</div>'
         html_cards += card
         
     html_cards += '</div>'
