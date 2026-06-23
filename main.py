@@ -694,8 +694,17 @@ def sync_daily_data(conn):
     cursor = conn.cursor()
     today = datetime.datetime.now(TAIPEI_TZ)
     
-    cursor.execute("SELECT MAX(Date) FROM daily_price")
-    last_date = cursor.fetchone()[0]
+    # 💡 讀取 GitHub Actions 傳來的強制重設開關
+    force_reset = os.environ.get('FORCE_RESET', 'false').lower() == 'true'
+    
+    if force_reset:
+        print("⚠️ 觸發強制重設：清空 daily_price 表格，準備重抓 5 年資料！")
+        cursor.execute("DELETE FROM daily_price")
+        conn.commit()
+        last_date = None
+    else:
+        cursor.execute("SELECT MAX(Date) FROM daily_price")
+        last_date = cursor.fetchone()[0]
             
     # ==============================
     # Prt.06.1 判斷更新區間
@@ -712,8 +721,9 @@ def sync_daily_data(conn):
         start_date = start_date_obj.strftime('%Y-%m-%d')
         print(f"📊 增量更新，抓取區間: {start_date} 至今...")
     else:
+        # 強制重設或初次啟動，抓取 5 年
         start_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
-        print(f"⚠️ 初次下載，抓取區間: {start_date} 至今...")
+        print(f"⚠️ 初次下載/強制重置，抓取區間: {start_date} 至今...")
 
     # ==============================
     # Prt.06.2 下載 Yahoo 資料
