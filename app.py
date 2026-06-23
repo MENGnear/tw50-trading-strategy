@@ -2,14 +2,14 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
 # 檔案名稱 : app.py
-# 策略版本 : v03.01 (環境變數資安升級版)
+# 策略版本 : v03.02 (自訂股票輸入修復與動態抓取版)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 自動讀取 main.py 產出的 temp_data.csv
-# 2. 具備完整的防呆機制 (讀取失敗提示、日期格式校正)
+# 2. 側邊欄支援動態新增股票 (使用 st.form 防刷新干擾)
 # 3. 科技深色儀表板切版與股票小卡渲染
 # 4. Telegram 5 分鐘區塊防洗版推播 (整合環境變數讀取)
-# 5. 模組化區塊 (Prt.00 ~ Prt.06) 方便後續擴充
+# 5. 模組化區塊 (Prt.00 ~ Prt.07) 方便後續擴充
 # ==========================================================
 
 # ==============================
@@ -18,6 +18,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
 import os
 import json
 import urllib.request
@@ -33,11 +34,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.01"
+APP_VERSION = "v03.02"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # ==============================
-# Prt.01 Telegram API 設定 (使用環境變數)
+# Prt.01 Telegram API 設定
 # ==============================
 def send_telegram_alert(message):
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -53,7 +54,6 @@ def send_telegram_alert(message):
     
     try:
         urllib.request.urlopen(req)
-        print("✅ Telegram 推播成功！")
     except Exception as e:
         print(f"❌ Telegram 推播失敗: {e}")
 
@@ -74,14 +74,12 @@ st.markdown('''
         border-bottom: 2px solid #30363d;
         margin-bottom: 20px;
     }
-    /* 股票小卡網格容器：自動換行對齊 */
     .stock-grid {
         display: flex;
         flex-wrap: wrap;
         gap: 20px;
         justify-content: flex-start;
     }
-    /* 單張股票小卡：固定高度、深色底、發光邊框 */
     .stock-card {
         background: #161b22;
         border: 1px solid #30363d;
@@ -99,89 +97,66 @@ st.markdown('''
         border-left: 4px solid #3fb950;
         box-shadow: 0 4px 12px rgba(63, 185, 80, 0.2);
     }
-    .stock-title {
-        font-size: 1.2rem;
-        font-weight: bold;
-        color: #ffffff;
-        margin-bottom: 10px;
-    }
-    .stock-price {
-        font-size: 1.8rem;
-        font-weight: bold;
-        color: #ff7b72;
-    }
-    /* 警報提示文字區塊 (固定高度防破版) */
-    .alert-box {
-        margin-top: 10px;
-        min-height: 40px; 
-        font-size: 0.9rem;
-        color: #f2cc60;
-        border-top: 1px dashed #30363d;
-        padding-top: 8px;
-    }
-    /* 無警報的佔位區塊 (保持小卡高度一致) */
-    .empty-alert {
-        margin-top: 10px;
-        min-height: 40px; 
-        border-top: 1px dashed #30363d;
-        padding-top: 8px;
-        color: transparent;
-    }
+    .stock-title { font-size: 1.2rem; font-weight: bold; color: #ffffff; margin-bottom: 10px; }
+    .stock-price { font-size: 1.8rem; font-weight: bold; color: #ff7b72; }
+    .alert-box { margin-top: 10px; min-height: 40px; font-size: 0.9rem; color: #f2cc60; border-top: 1px dashed #30363d; padding-top: 8px; }
+    .empty-alert { margin-top: 10px; min-height: 40px; border-top: 1px dashed #30363d; padding-top: 8px; color: transparent; }
 </style>
 ''', unsafe_allow_html=True)
 
 # ==============================
-# Prt.03 資料讀取與防呆機制
+# Prt.03 資料讀取 (CSV 與動態 yfinance)
 # ==============================
-@st.cache_data(ttl=60) # 每 60 秒刷新一次快取
-def load_data():
+@st.cache_data(ttl=60)
+def load_csv_data():
     file_path = "temp_data.csv"
     if not os.path.exists(file_path):
-        return pd.DataFrame(), "⚠️ 找不到資料檔 (temp_data.csv)，請確認 main.py 是否已執行並成功產出檔案。"
-    
+        return pd.DataFrame(), "⚠️ 找不到資料檔 (temp_data.csv)。"
     try:
         df = pd.read_csv(file_path)
-        # 日期格式強制校正
         if 'Date' in df.columns:
             df['Date'] = pd.to_datetime(df['Date'])
-        # 確保必要的欄位存在
-        required_cols = ['ticker', 'Close']
-        if not all(col in df.columns for col in required_cols):
-            return pd.DataFrame(), f"⚠️ CSV 缺少必要欄位，現有欄位：{list(df.columns)}"
-        
         return df, "✅ 資料載入成功"
     except Exception as e:
-        return pd.DataFrame(), f"❌ 讀取資料失敗: {e}"
+        return pd.DataFrame(), f"❌ 讀取失敗: {e}"
+
+@st.cache_data(ttl=300) # 自訂股票每 5 分鐘抓一次避免限制
+def fetch_custom_stock(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period="3mo") # 抓3個月計算RSI24
+        if df.empty: return None
+        df = df.reset_index()
+        if 'Date' in df.columns:
+            df['Date'] = pd.to_datetime(df['Date']).dt.tz_localize(None)
+        df['ticker'] = ticker
+        return df[['ticker', 'Date', 'Close']]
+    except:
+        return None
 
 # ==============================
-# Prt.04 技術指標計算 (動態附加)
+# Prt.04 技術指標計算
 # ==============================
 def calculate_indicators(df_stock):
-    '''計算單檔股票的 RSI 與 MA (依照日期排序計算)'''
     df_stock = df_stock.sort_values('Date').copy()
-    
-    # 計算漲跌
     delta = df_stock['Close'].diff()
     up = delta.clip(lower=0)
     down = -1 * delta.clip(upper=0)
     
-    # 計算 RSI 06, 14, 24
     for period in [6, 14, 24]:
         ema_up = up.ewm(com=period-1, adjust=False).mean()
         ema_down = down.ewm(com=period-1, adjust=False).mean()
         rs = ema_up / ema_down
         df_stock[f'RSI_{period}'] = 100 - (100 / (1 + rs))
         
-    return df_stock.iloc[-1] # 回傳最新一天的資料
+    return df_stock.iloc[-1]
 
 # ==============================
-# Prt.05 推播防呆機制 (5分鐘區塊)
+# Prt.05 推播防呆機制
 # ==============================
 def check_and_push_alert(ticker, price, rsi_status):
-    '''5 分鐘區間鎖定防呆推播'''
     now = datetime.datetime.now(TAIPEI_TZ)
-    current_minute = now.minute
-    interval_block = current_minute // 5  # 將一小時切成 12 個 5 分鐘區塊 (0~11)
+    interval_block = now.minute // 5 
     
     if 'push_history' not in st.session_state:
         st.session_state.push_history = {}
@@ -195,7 +170,7 @@ def check_and_push_alert(ticker, price, rsi_status):
         st.session_state.push_history[history_key] = interval_block 
 
 # ==============================
-# Prt.06 側邊欄控制
+# Prt.06 側邊欄控制 (新增表單防護)
 # ==============================
 with st.sidebar:
     st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
@@ -207,14 +182,39 @@ with st.sidebar:
     st.divider()
     
     st.markdown('''
-        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 5px solid #00b894; padding: 10px; border-radius: 5px;">
-            <h4 style="margin-top: 0; color: #c9d1d9;">➕ 新增監測股票</h4>
-            <p style="font-size: 0.8rem; color: #8b949e;">未來可擴充對接資料庫或 Watchlist</p>
+        <div style="background-color: #161b22; border: 1px solid #30363d; border-left: 5px solid #00b894; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
+            <h4 style="margin-top: 0; color: #c9d1d9;">➕ 新增自訂監測</h4>
+            <p style="font-size: 0.8rem; color: #8b949e; margin-bottom: 0;">透過 Yahoo 歷史資料即時運算</p>
         </div>
     ''', unsafe_allow_html=True)
     
-    new_stock = st.text_input("輸入股票代號 (如 2330.TW)", key="new_stock_input")
+    # 確保清單存在
+    if 'custom_watch' not in st.session_state:
+        st.session_state.custom_watch = []
     
+    # 【關鍵修復】使用 st.form 包裝，阻擋自動刷新干擾打字！
+    with st.form(key="add_stock_form", clear_on_submit=True):
+        new_stock = st.text_input("輸入股票代號 (如 2330.TW, AAPL)")
+        submit_btn = st.form_submit_button("➕ 增加監控小卡", use_container_width=True)
+        
+        if submit_btn and new_stock:
+            clean_ticker = new_stock.strip().upper()
+            if clean_ticker not in st.session_state.custom_watch:
+                st.session_state.custom_watch.append(clean_ticker)
+                st.success(f"已加入 {clean_ticker}")
+            else:
+                st.warning("已在清單中")
+                
+    # 顯示並刪除自訂清單
+    if st.session_state.custom_watch:
+        st.markdown("**👀 你的自訂監控:**")
+        for ts in st.session_state.custom_watch:
+            cols = st.columns([3, 1])
+            cols[0].write(f"📌 {ts}")
+            if cols[1].button("❌", key=f"del_{ts}"):
+                st.session_state.custom_watch.remove(ts)
+                st.rerun()
+
     st.divider()
     st.caption(f"上次更新時間: {datetime.datetime.now(TAIPEI_TZ).strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -227,20 +227,39 @@ def main():
     # 自動刷新 (每 30 秒)
     st_autorefresh(interval=30 * 1000, key="stock_dashboard_refresh")
     
-    df, status_msg = load_data()
+    # 1. 讀取 CSV 基礎資料
+    df, status_msg = load_csv_data()
     
+    # 2. 融合側邊欄新增的自訂股票資料
+    custom_dfs = []
+    if 'custom_watch' in st.session_state and st.session_state.custom_watch:
+        for ct in st.session_state.custom_watch:
+            cdf = fetch_custom_stock(ct)
+            if cdf is not None:
+                custom_dfs.append(cdf)
+            else:
+                st.sidebar.error(f"找不到 {ct} 的資料")
+                
+    if custom_dfs:
+        custom_df_combined = pd.concat(custom_dfs, ignore_index=True)
+        if not df.empty:
+            df = pd.concat([df, custom_df_combined], ignore_index=True)
+        else:
+            df = custom_df_combined
+
+    # 檢查是否完全沒有資料
     if df.empty:
         st.error(status_msg)
         return
         
-    st.success(status_msg)
-    
+    # 3. 開始渲染網格
     tickers = df['ticker'].unique()
     html_cards = '<div class="stock-grid">'
     
     for ticker in tickers:
         df_stock = df[df['ticker'] == ticker]
         
+        # 資料天數不夠算 RSI，就跳過
         if len(df_stock) < 30:
             continue
             
