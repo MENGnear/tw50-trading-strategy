@@ -16,6 +16,12 @@ on:
     # 台灣時間 15:00 = UTC 07:00 (避開六日休市)
     - cron: '0 7 * * 1-5'
   workflow_dispatch: 
+    inputs: # 💡 新增手動輸入選單
+      force_reset:
+        description: '⚠️ 強制清空舊資料並重抓 5 年歷史資料'
+        required: true
+        type: boolean
+        default: false
 
 # 【關鍵修復】賦予寫入權限，否則無法將資料庫推回 GitHub
 permissions:
@@ -42,6 +48,7 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_RESET: ${{ inputs.force_reset }} # 💡 將開關狀態傳給 Python
         run: python main.py
 
       # 【關鍵修復】將算好的資料庫與 CSV 自動 Push 回 GitHub 儲存庫
