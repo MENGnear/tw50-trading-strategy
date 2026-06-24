@@ -388,18 +388,50 @@ def run_0050_batch(conn):
     # ==============================
     # Prt.13 Telegram 訊息組裝与發送
     # ==============================
-    msg_parts = [f"📊 <b>{strategy_version} 台股 50 戰情室</b>"]
-
-    if alerts_setup:
-        msg_parts.append("================\n🎯 <b>潛力起漲預告 (Watchlist)</b>\n" + "\n\n".join(alerts_setup))
-
-    if alerts_trigger:
-        msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n\n".join(alerts_trigger))
-
-    if not alerts_trigger and not alerts_setup:
-        msg_parts.append("\n盤後無新增訊號。")
+    # 抓取台北時間
+    now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
     
-    send_telegram_alert("\n\n".join(msg_parts))
+    # 初始化訊息陣列 (加入標題與時間)
+    msg_parts = [
+        f"📊 <b>{strategy_version} 台股 50 戰情室 (自動盤後更新)</b>",
+        f"🕒 {now_str} 回測"
+    ]
+
+    # ==============================
+    # Prt.13.1 Watchlist (對齊手動格式)
+    # ==============================
+    if alerts_setup:
+        # 為了跟手動版本一樣由分數高到低排序，我們先依照分數對字串進行排序
+        # (這裡利用字串中包含的 "Score: XX" 數字來降冪排序)
+        try:
+            alerts_setup_sorted = sorted(alerts_setup, key=lambda x: int(x.split('Score: ')[1].split(',')[0]), reverse=True)
+        except Exception:
+            alerts_setup_sorted = alerts_setup # 若解析失敗則維持原排序
+
+        msg_parts.append("================\n🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n" + "\n".join(alerts_setup_sorted))
+
+    # ==============================
+    # Prt.13.2 Trigger (若有觸發進出場訊號)
+    # ==============================
+    if alerts_trigger:
+        msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n".join(alerts_trigger))
+
+    # ==============================
+    # Prt.13.3 無訊號
+    # ==============================
+    if not alerts_trigger and not alerts_setup:
+        msg_parts.append("================\n盤後無新增訊號。")
+        
+    # ==============================
+    # Prt.13.4 系統狀態結尾
+    # ==============================
+    msg_parts.append("================\n✅ 系統目前正常運作中")
+
+    # ==============================
+    # Prt.14 發送 Telegram
+    # ==============================
+    # 注意：將原本的 "\n\n".join() 改成 "\n".join() 讓整體排版更緊湊
+    send_telegram_alert("\n".join(msg_parts))
 
 # ==============================
 # Prt.15 主程式入口
