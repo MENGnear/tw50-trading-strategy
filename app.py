@@ -1,8 +1,8 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (裝甲防禦版)
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (視覺修復版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.06 (型別強制清洗與單點故障隔離)
+# 策略版本 : v03.07 (修復 Markdown 縮排導致的 HTML 原始碼外露)
 # ==========================================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.06"
+APP_VERSION = "v03.07"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -69,25 +69,17 @@ st.markdown('''
 # Prt.03 資料讀取與暴力清洗
 # ==============================
 def clean_dataframe(df):
-    """ 強制清洗資料，避免字串(逗號)與時區問題 """
     if df.empty: return df
-    
-    # 統一時間欄位
-    if 'Datetime' in df.columns:
-        df = df.rename(columns={'Datetime': 'Date'})
-        
+    if 'Datetime' in df.columns: df = df.rename(columns={'Datetime': 'Date'})
     if 'Date' in df.columns:
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         try:
             if hasattr(df['Date'].dt, 'tz') and df['Date'].dt.tz is not None:
                 df['Date'] = df['Date'].dt.tz_localize(None)
         except: pass
-
-    # 強制數值轉換 (剔除逗號，避免 ValueError: Unknown format code 'f')
     for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
-            
     return df
 
 @st.cache_data(ttl=60)
@@ -112,21 +104,16 @@ def fetch_custom_stock(ticker):
     except: return None
 
 # ==============================
-# Prt.04 技術指標與 v02.12 安全評分 (v03.06.1 修正版)
+# Prt.04 技術指標與 v02.12 安全評分
 # ==============================
 def calculate_v0212_score(df_stock):
-    # 確保資料依照時間排序，並移除沒有收盤價的無效天數
     df = df_stock.dropna(subset=['Close']).sort_values('Date').copy()
-    
-    # 🚨 第一道防線：如果資料連 2 天都沒有，根本無法計算趨勢，直接放棄
     if len(df) < 2: return None
 
-    # 基礎指標 (補0以防爆開)
     df['MA20'] = df['Close'].rolling(window=min(20, len(df))).mean().fillna(0)
     df['MA60'] = df['Close'].rolling(window=min(60, len(df))).mean().fillna(0)
     df['V_MA5'] = df['Volume'].rolling(window=min(5, len(df))).mean().fillna(0)
     
-    # MACD 結構計算
     if len(df) >= 26:
         ema12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
@@ -136,11 +123,9 @@ def calculate_v0212_score(df_stock):
     else:
         df['MACD_Hist'] = 0.0
 
-    # 取得最新與昨天的資料行
     today = df.iloc[-1]
     yest = df.iloc[-2] if len(df) > 1 else today
 
-    # 提取安全數值，避免 KeyError 
     today_close = today.get('Close', 0)
     today_vol = today.get('Volume', 0)
     today_macd = today.get('MACD_Hist', 0)
@@ -149,29 +134,20 @@ def calculate_v0212_score(df_stock):
     today_ma60 = today.get('MA60', 0)
     today_vma5 = today.get('V_MA5', 0)
 
-    # --- 五大評分邏輯 ---
-    # 1. MACD 翻揚
     t1 = 15 if (today_macd > yest_macd) else 0
-    
-    # 2. 站上月線
     m1 = 10 if (today_ma20 > 0 and today_close > today_ma20) else 0
     
-    # 3. 月線斜率 (🚨 第二道防線：嚴格檢查長度是否大於等於 6，避免 iloc[-6] 崩潰)
     m2 = 0
     if len(df) >= 6:
         ma20_past = df['MA20'].iloc[-6]
         if ma20_past > 0 and ((today_ma20 / ma20_past) - 1) > 0.01:
             m2 = 15
             
-    # 4. 多頭排列
     m3 = 10 if (today_ma60 > 0 and today_ma20 > today_ma60) else 0
-    
-    # 5. 爆量突破
     v1 = 10 if (today_vma5 > 0 and today_vol > (today_vma5 * 1.3)) else 0
     
     total_score = int(t1 + m1 + m2 + m3 + v1)
 
-    # RSI 計算
     df['RSI_6'], df['RSI_14'], df['RSI_24'] = 50.0, 50.0, 50.0
     if len(df) >= 24:
         delta = df['Close'].diff()
@@ -216,9 +192,8 @@ def main():
     display_list = []
     tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
     
-    # 🎯 核心防禦：隔離運算，單檔股票壞掉不影響全局
     for tk in tickers:
-        if pd.isna(tk): continue # 跳過無效代號
+        if pd.isna(tk): continue 
         try:
             df_tk = combined_df[combined_df['ticker'] == tk]
             data = calculate_v0212_score(df_tk)
@@ -226,7 +201,7 @@ def main():
                 data['ticker'] = tk
                 display_list.append(data)
         except Exception as e:
-            st.sidebar.warning(f"⚠️ 標的 {tk} 資料解析異常，已暫時跳過。")
+            st.sidebar.warning(f"⚠️ 標的 {tk} 資料解析異常。")
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
@@ -236,33 +211,32 @@ def main():
         price = d.get('Close', 0.0)
         high_today = d.get('High', 0.0)
         
-        # 安全數值格式化防護
         price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
         high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
         
-        if score >= 45: action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>'
-        else: action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
-
+        # 移除了所有多餘縮排，防止 Markdown 解析成程式碼區塊
+        action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>' if score >= 45 else f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
         rsi_msg = "🚀 強勢多頭排列" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else ""
 
-        card = f'''
-            <div class="stock-card">
-                <div class="stock-header">
-                    <div class="stock-title">{d['ticker']}</div>
-                    <div style="font-size: 0.8rem; color: #3fb950; font-weight: bold;">{rsi_msg}</div>
-                </div>
-                <div class="total-score">{score}</div>
-                <div class="stock-price">{price_str}</div>
-                <div class="sub-scores">
-                    <span class="sub-score-item">1.MACD: {d['s1']}</span>
-                    <span class="sub-score-item">2.MA20: {d['s2']}</span>
-                    <span class="sub-score-item">3.斜率: {d['s3']}</span>
-                    <span class="sub-score-item">4.趨勢: {d['s4']}</span>
-                    <span class="sub-score-item">5.量: {d['s5']}</span>
-                </div>
-                {action_html}
-            </div>
-        '''
+        # 這裡的 HTML 完全攤平，使用字串串接確保不包含換行後的縮排
+        card = (
+            f'<div class="stock-card">'
+            f'<div class="stock-header">'
+            f'<div class="stock-title">{d["ticker"]}</div>'
+            f'<div style="font-size: 0.8rem; color: #3fb950; font-weight: bold;">{rsi_msg}</div>'
+            f'</div>'
+            f'<div class="total-score">{score}</div>'
+            f'<div class="stock-price">{price_str}</div>'
+            f'<div class="sub-scores">'
+            f'<span class="sub-score-item">1.MACD: {d["s1"]}</span>'
+            f'<span class="sub-score-item">2.MA20: {d["s2"]}</span>'
+            f'<span class="sub-score-item">3.斜率: {d["s3"]}</span>'
+            f'<span class="sub-score-item">4.趨勢: {d["s4"]}</span>'
+            f'<span class="sub-score-item">5.量: {d["s5"]}</span>'
+            f'</div>'
+            f'{action_html}'
+            f'</div>'
+        )
         html_cards += card
         
     html_cards += '</div>'
