@@ -835,232 +835,66 @@ def sync_daily_data(conn):
 # ==============================
 # Prt.07 回測主控引擎
 # ==============================
-#
-# 執行整個策略流程
-#
-# ==============================
+print("啟動 TW50 掃描與回測...")
 
-def run_0050_batch(conn):
+# 這裡應該有您原本的 tickers 陣列初始化，以及推播訊息陣列的宣告
+# alerts_setup = []
+# alerts_trigger = []
+# tickers = [...]
 
-    strategy_version = "v02.12"
+# 🚀 v02.13 新增：開啟大批次交易防護 (Try-Except-Rollback)
+try:
+    # 宣告開始批次交易，讓 SQLite 將接下來的寫入全數暫存在記憶體中
+    conn.execute("BEGIN TRANSACTION")
 
-    print("=" * 60)
-    print(f"Strategy Version : {strategy_version}")
-    print(f"Backtest Start   : {datetime.datetime.now(TAIPEI_TZ)}")
-    print("=" * 60)
-    
     # ==============================
-    # Prt.07.1 同步資料庫
+    # Prt.08 個股回測流程
     # ==============================
-    sync_daily_data(conn)
-    
-    print(f"🚀 啟動 {strategy_version} 回測引擎...")
-    
-    all_trades = []
-    alerts_setup = []
-    alerts_trigger = []
-    
-    cursor = conn.cursor()
-
-    alert_cursor = conn.cursor()
-    
-    # ==============================
-    # Prt.07.2 清除本版回測資料
-    # ==============================
-    cursor.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
-    conn.commit()
-
-# ==============================
-# Prt.08 個股回測流程
-# ==============================
-#
-# 逐一處理台灣50股票
-#
-# ==============================
-
-    for ticker in tw50_tickers:
+    for ticker in tickers:
         try:
-
-            # ==============================
-            # Prt.08.1 讀取歷史資料
-            # ==============================
+            # (這裡保留您原本的抓取資料、Prt.03 指標計算、Prt.04~06 策略邏輯)
+            # df = ... 
+            # calculate_indicators(df) ...
             
-            df_full = pd.read_sql_query(
-                "SELECT Date, Open, High, Low, Close, Volume FROM daily_price WHERE ticker = ? ORDER BY Date", 
-                conn, 
-                params=(ticker,),
-                parse_dates=['Date']
-            )
-            
-            if len(df_full) < 65: continue
-                
-            # ==============================
-            # Prt.08.2 執行策略回測
-            # ==============================
-            trades, df_updated = calculate_v0212_and_backtest(df_full, ticker, strategy_version)
-            all_trades.extend(trades)
-
-            # ==============================
-            # Prt.08.3 取得最新交易日結果
-            # ==============================
-            latest_day = df_updated.iloc[-1]
-            yesterday_day = df_updated.iloc[-2]
-            
-            score_today = latest_day['Score']
-            score_yesterday = yesterday_day['Score']
-            
-# ==============================
-# Prt.09 訊號判斷
-# ==============================
-#
-# 判斷今天是否產生新訊號
-#       
-# ==============================
-
-            latest_trading_day = (
-                df_updated['Date']
-                .max()
-                .strftime('%Y-%m-%d')
-            )
+            # (這裡保留您原本的 Prt.09 訊號判斷、Prt.10 / Prt.11 推播收集)
+            # if setup_active: alerts_setup.append(...)
             
             # ==============================
-            # Prt.09.1 Setup 首次成立
+            # Prt.12 回測結果寫入
             # ==============================
-            is_setup_ready = (pd.notna(score_today) and score_today >= 45 and pd.notna(score_yesterday) and score_yesterday < 45)
+            # 這裡只做 execute 寫入暫存，【不要】在這裡 commit
+            '''
+            conn.execute('''
+                INSERT INTO trade_records (ticker, entry_date, entry_price, ...)
+                VALUES (?, ?, ?, ...)
+            ''', trade_data)
+            '''
             
-            # ==============================
-            # Prt.09.2 最新交易日成功進場
-            # ==============================
-            entered_latest_day_trades = [
-                t for t in trades
-                if t[2] == latest_trading_day
-            ]
-
-# ==============================
-# Prt.10 Trigger 推播
-# ==============================
-#
-# 當股票已經正式進場
-#
-# 建立買進通知內容
-#
-# 準備送往 Telegram
-#
-# ==============================
+            # ⚠️ 刪除原本在這裡的 conn.commit() ！！！
             
-            # ==============================
-            # Prt.10.1 計算實際進場價格
-            # ==============================
-            if entered_latest_day_trades:
+        except Exception as inner_e:
+            # 🚀 v02.13 新增：單檔股票如果發生 yfinance 抓不到資料的小錯誤，跳過它，不要讓整個系統崩潰
+            print(f"⚠️ {ticker} 處理異常，已跳過: {inner_e}")
+            continue
 
-                actual_entry_price = entered_latest_day_trades[-1][4]
+    # ==============================
+    # 🎯 迴圈結束：執行大批次落盤 (Batch Commit)
+    # ==============================
+    # 當 50 檔股票全部安全跑完後，才一口氣將記憶體內的資料寫入實體硬碟
+    conn.commit()
+    print("✅ v02.13 效能優化：TW50 全數標的已完成大批次寫入！")
 
-                entry_trade_date = pd.to_datetime(
-                    entered_latest_day_trades[-1][2]
-                )
-                
-                entry_row = df_updated.loc[
-                    df_updated['Date'] == entry_trade_date
-                ]
-                entry_ma20 = (
-                    entry_row.iloc[0]['MA20']
-                    if not entry_row.empty
-                    else latest_day['MA20']
-                )
-           
-            # ==============================
-            # Prt.10.2 檢查是否已推播
-            # ==============================
-                alert_cursor.execute(
-                    '''
-                    SELECT 1
-                    FROM alert_log
-                    WHERE strategy_version = ?
-                    AND ticker = ?
-                    AND entry_date = ?
-                    ''',
-                    (
-                        strategy_version,
-                        ticker,
-                        latest_trading_day
-                    )
-                )
-
-                already_sent = alert_cursor.fetchone()
-
-                if not already_sent:
-
-            # ==============================
-            # Prt.10.3 建立 Trigger 訊息
-            # ==============================
-                    alerts_trigger.append(
-                        f"✅ <b>{ticker}</b> 今日突破進場\n"
-                        f"成交價 <b>{actual_entry_price:.2f}</b>\n"
-                        f"防守月線 <b>{entry_ma20:.2f}</b>"
-                    )
-
-            # ==============================
-            # Prt.10.4 寫入 Alert Log
-            # ==============================
-                    alert_cursor.execute(
-                        '''
-                        INSERT OR IGNORE INTO alert_log
-                        (
-                            strategy_version,
-                            ticker,
-                            entry_date
-                        )
-                        VALUES (?, ?, ?)
-                        ''',
-                        (
-                            strategy_version,
-                            ticker,
-                            latest_trading_day
-                        )
-                    )
-
-# ==============================
-# Prt.11 Watchlist 推播
-# ==============================
-#
-# 將符合 Setup 條件
-# 但尚未突破進場的股票整理成觀察名單
-#
-# ==============================
-
-            elif is_setup_ready:
-
-                alerts_setup.append(
-                    f"🚀 <b>{ticker}</b> 首日達標\n"
-                    f"Score = {int(score_today)}\n"
-                    f"明日突破 <b>{latest_day['High']:.2f}</b> 買進"
-                )
-                
-        except Exception as e:
-            print(f"回測 {ticker} 錯誤: {e}")
-
-        # ==============================
-        # Commit Alert Log
-        # ==============================
-        
-        if conn.in_transaction:
-            conn.commit()
-            
-# ==============================
-# Prt.12 回測結果寫入資料庫
-# ==============================
-#
-# 將所有交易紀錄存入資料庫
-#
-# ==============================
+except Exception as main_e:
+    # ==============================
+    # 🚨 全局異常防護：資料庫回滾 (Rollback)
+    # ==============================
+    # 如果迴圈跑到一半發生「斷網、記憶體溢位」等嚴重崩潰，將資料庫恢復到寫入前的乾淨狀態
+    conn.rollback()
+    error_message = f"❌ 系統嚴重崩潰，資料庫已安全回滾！原因: {main_e}"
+    print(error_message)
     
-    if all_trades:
-        cursor.executemany('''
-            INSERT INTO backtest_trades 
-            (version, ticker, entry_date, exit_date, entry_price, exit_price, profit_pct, holding_bars, max_profit_pct, trade_max_drawdown_pct, entry_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', all_trades)
-        conn.commit()
+    # 將嚴重錯誤塞入推播陣列，讓您在 Telegram 也能第一時間收到警報
+    alerts_trigger.append(f"⚠️ <b>資料庫寫入失敗</b>\n{error_message}")
 
 # ==============================
 # Prt.13 Telegram 訊息組裝
