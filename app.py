@@ -1,8 +1,8 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (Show Me The Money 密技版)
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 升級版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.10 (修復 Telegram 金鑰讀取與真實報錯)
+# 策略版本 : v03.10 (結合 v2.0.0.f 頂級視覺與矩陣排版)
 # ==========================================================
 
 import streamlit as st
@@ -33,25 +33,22 @@ def safe_rerun():
     else: st.experimental_rerun()
 
 # ==============================
-# Prt.01 Telegram API 設定 (v03.10 雙軌讀取升級)
+# Prt.01 Telegram API 設定
 # ==============================
 def send_telegram_alert(message):
     token = None
     chat_id = None
     
-    # 1. 先嘗試從 Streamlit Secrets 讀取 (雲端網頁版專用)
     try:
         token = st.secrets["TELEGRAM_TOKEN"]
         chat_id = st.secrets["TELEGRAM_CHAT_ID"]
     except:
         pass
         
-    # 2. 如果沒有，再嘗試從系統環境變數讀取 (本機或 Docker 專用)
     if not token or not chat_id:
         token = os.environ.get('TELEGRAM_TOKEN')
         chat_id = os.environ.get('TELEGRAM_CHAT_ID')
         
-    # 如果兩邊都抓不到，回傳 False 讓 UI 顯示錯誤
     if not token or not chat_id: 
         return False, "找不到 Telegram Token 或 Chat ID 設定"
         
@@ -66,23 +63,47 @@ def send_telegram_alert(message):
         return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
-# Prt.02 頁面與 CSS 全域設定
+# Prt.02 頂級深色優化視覺 CSS (整合兩版)
 # ==============================
-st.markdown('''
+st.markdown(r'''
 <style>
-    .stApp { background-color: #0e1117; color: #c9d1d9; }
-    .main-title { color: #58a6ff; font-weight: 800; text-align: center; padding-bottom: 20px; border-bottom: 2px solid #30363d; margin-bottom: 20px; }
-    .stock-grid { display: flex; flex-wrap: wrap; gap: 15px; justify-content: flex-start; }
-    .stock-card { background: #161b22; border: 1px solid #30363d; border-left: 5px solid #58a6ff; border-radius: 12px; padding: 20px; width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: transform 0.2s; }
-    .stock-card:hover { transform: translateY(-5px); border-left-color: #3fb950; }
-    .stock-header { display: flex; justify-content: space-between; align-items: flex-start; }
-    .stock-title { font-size: 1.2rem; font-weight: bold; color: #ffffff; }
-    .total-score { font-size: 3.2rem; font-weight: 900; color: #58a6ff; line-height: 1; margin: 12px 0; }
-    .stock-price { font-size: 1.4rem; font-weight: bold; color: #ff7b72; margin-bottom: 12px; }
-    .sub-scores { font-size: 0.75rem; color: #8b949e; display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; border-top: 1px solid #30363d; padding-top: 10px; }
-    .sub-score-item { background: #0d1117; padding: 2px 6px; border-radius: 4px; white-space: nowrap; border: 1px solid #21262d; }
-    .action-text { font-size: 0.95rem; font-weight: bold; color: #f2cc60; background: rgba(242, 204, 96, 0.08); padding: 10px; border-radius: 8px; border: 1px dashed #f2cc60; text-align: center; }
-    .action-wait { font-size: 0.95rem; color: #8b949e; background: rgba(139, 148, 158, 0.05); padding: 10px; border-radius: 8px; border: 1px dashed #30363d; text-align: center; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-serif !important; }
+[data-testid="stActionElements"] { display: none !important; }
+header[data-testid="stHeader"] { background-color: transparent !important; }
+.main .block-container { padding-top: 1.5rem !important; margin-top: -30px !important; }
+h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
+html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
+[data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
+
+/* 側邊欄容器設計 */
+[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #94a3b8 !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
+.stTextInput div[data-baseweb="input"] { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important; }
+.stTextInput input { color: #ffffff !important; background-color: transparent !important; }
+[data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
+.stButton > button { background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; }
+.stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
+
+/* 網格與卡片設計 */
+.flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
+.stock-compact-card { background-color: #171a23; border: 1px solid #2d3748; border-radius: 12px; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; transition: transform 0.2s, border-color 0.2s; }
+.stock-compact-card:hover { transform: translateY(-3px); border-color: #3b82f6; }
+
+.card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; display: flex; justify-content: space-between; align-items: baseline; }
+.card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; }
+.score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
+
+.card-middle-layout { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.layout-left-col { flex: 1; border-right: 1px dashed #2d3748; padding-right: 4px; text-align: left !important; line-height: 1.6; }
+.layout-right-col { flex: 1; text-align: left !important; padding-left: 12px; line-height: 1.6; }
+.txt-label { color: #94a3b8; font-size: 0.8rem; white-space: nowrap; }
+.txt-label-rsi { color: #a78bfa; font-size: 0.8rem; white-space: nowrap; }
+.txt-bold-val { color: #f1f5f9; font-size: 0.8rem; font-weight: 600; padding-left: 4px; }
+
+/* 行動警示框 */
+.custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.85rem; font-weight: 700; box-sizing: border-box; }
+.action-buy { color: #f2cc60; background-color: rgba(242, 204, 96, 0.15) !important; border: 1px dashed #f2cc60; }
+.action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; }
 </style>
 ''', unsafe_allow_html=True)
 
@@ -234,55 +255,51 @@ def main():
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
+    # 側邊欄：套用 v2.0 容器化設計
     with st.sidebar:
-        st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
-        st.markdown(f"**📅 歷史資料區間：**\n\n`< {date_range_str} >`")
-        st.markdown("---")
-        
-        if st.button("🔄 刷新數據"): 
-            st.cache_data.clear()
-            safe_rerun()
+        with st.container(border=True):
+            st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
+            st.markdown(f"<div style='color:#94a3b8; font-size:0.85rem;'>📅 歷史資料區間：<br>{date_range_str}</div>", unsafe_allow_html=True)
             
-        if st.button("▶️ 執行股票回測"):
-            with st.spinner("🚀 正在執行判定與通報..."):
-                now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
-                
-                msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
-                msg += f"🕒 {now_str} 回測\n"
-                msg += "================\n"
-                
-                setups = [d for d in display_list if d.get('Score', 0) >= 45]
-                if setups:
-                    msg += "🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n"
-                    for s in setups:
-                        msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進)\n"
-                else:
-                    msg += "盤後無新增訊號。\n"
-                    
-                msg += "================\n"
-                msg += "✅ 系統目前正常運作中"
-                
-                # 取得執行結果與錯誤訊息
-                is_success, error_reason = send_telegram_alert(msg)
-                
-                if is_success:
-                    st.success("✅ 回測通報已成功發送至 Telegram！")
-                else:
-                    # 如果失敗，會在網頁上顯示原因
-                    st.error(f"❌ 發送失敗：{error_reason}")
-
-        st.markdown("---")
-        
-        with st.form("add_tk"):
-            nt = st.text_input("新增代號 (例: 2330.TW)")
-            if st.form_submit_button("➕ 加入監控") and nt:
-                if 'custom_watch' not in st.session_state: 
-                    st.session_state.custom_watch = []
-                if nt.upper() not in st.session_state.custom_watch:
-                    st.session_state.custom_watch.append(nt.upper())
+            if st.button("🔄 刷新數據", use_container_width=True): 
+                st.cache_data.clear()
                 safe_rerun()
+                
+            if st.button("▶️ 執行股票回測", use_container_width=True):
+                with st.spinner("🚀 正在執行判定與通報..."):
+                    now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
+                    msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
+                    msg += f"🕒 {now_str} 回測\n================\n"
+                    
+                    setups = [d for d in display_list if d.get('Score', 0) >= 45]
+                    if setups:
+                        msg += "🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n"
+                        for s in setups:
+                            msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進)\n"
+                    else:
+                        msg += "盤後無新增訊號。\n"
+                        
+                    msg += "================\n✅ 系統目前正常運作中"
+                    is_success, error_reason = send_telegram_alert(msg)
+                    
+                    if is_success:
+                        st.success("✅ 回測通報已成功發送至 Telegram！")
+                    else:
+                        st.error(f"❌ 發送失敗：{error_reason}")
 
-    html_cards = '<div class="stock-grid">'
+        with st.container(border=True):
+            st.markdown("### ➕ 新增監控")
+            with st.form("add_tk"):
+                nt = st.text_input("輸入代號 (例: 2330.TW)", label_visibility="collapsed")
+                if st.form_submit_button("➕ 加入監控", use_container_width=True) and nt:
+                    if 'custom_watch' not in st.session_state: 
+                        st.session_state.custom_watch = []
+                    if nt.upper() not in st.session_state.custom_watch:
+                        st.session_state.custom_watch.append(nt.upper())
+                    safe_rerun()
+
+    # 畫面渲染：套用 v2.0 矩陣小卡
+    html_cards = '<div class="flex-matrix-container">'
     for d in display_list:
         score = d.get('Score', 0)
         price = d.get('Close', 0.0)
@@ -291,23 +308,34 @@ def main():
         price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
         high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
         
-        action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>' if score >= 45 else f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
-        rsi_msg = "🚀 強勢多頭排列" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else ""
+        # 判斷多頭動能
+        rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
+        
+        # 行動提示框
+        if score >= 45:
+            action_html = f'<div class="custom-alert-box action-buy">🎯 明日突破 {high_str} 買進</div>'
+        else:
+            action_html = f'<div class="custom-alert-box action-wait">⏳ 觀察多頭動能續航</div>'
 
+        # 組裝 HTML 小卡
         card = (
-            f'<div class="stock-card">'
-            f'<div class="stock-header">'
-            f'<div class="stock-title">{d["ticker"]}</div>'
-            f'<div style="font-size: 0.8rem; color: #3fb950; font-weight: bold;">{rsi_msg}</div>'
+            f'<div class="stock-compact-card">'
+            f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
+            f'<div class="card-price-txt">{price_str}</div>'
+            f'<div class="card-middle-layout">'
+            f'<div class="layout-left-col">'
+            f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
+            f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
+            f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
+            f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
+            f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
             f'</div>'
-            f'<div class="total-score">{score}</div>'
-            f'<div class="stock-price">{price_str}</div>'
-            f'<div class="sub-scores">'
-            f'<span class="sub-score-item">1.MACD: {d["s1"]}</span>'
-            f'<span class="sub-score-item">2.MA20: {d["s2"]}</span>'
-            f'<span class="sub-score-item">3.斜率: {d["s3"]}</span>'
-            f'<span class="sub-score-item">4.趨勢: {d["s4"]}</span>'
-            f'<span class="sub-score-item">5.量: {d["s5"]}</span>'
+            f'<div class="layout-right-col">'
+            f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
+            f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
+            f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
+            f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
+            f'</div>'
             f'</div>'
             f'{action_html}'
             f'</div>'
