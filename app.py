@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (Show Me The Money 密技版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.09 (新增手動回測與 Telegram 存活通報)
+# 策略版本 : v03.10 (修復 Telegram 金鑰讀取與真實報錯)
 # ==========================================================
 
 import streamlit as st
@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.09"
+APP_VERSION = "v03.10"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -33,17 +33,37 @@ def safe_rerun():
     else: st.experimental_rerun()
 
 # ==============================
-# Prt.01 Telegram API 設定
+# Prt.01 Telegram API 設定 (v03.10 雙軌讀取升級)
 # ==============================
 def send_telegram_alert(message):
-    token = os.environ.get('TELEGRAM_TOKEN')
-    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
-    if not token or not chat_id: return
+    token = None
+    chat_id = None
+    
+    # 1. 先嘗試從 Streamlit Secrets 讀取 (雲端網頁版專用)
+    try:
+        token = st.secrets["TELEGRAM_TOKEN"]
+        chat_id = st.secrets["TELEGRAM_CHAT_ID"]
+    except:
+        pass
+        
+    # 2. 如果沒有，再嘗試從系統環境變數讀取 (本機或 Docker 專用)
+    if not token or not chat_id:
+        token = os.environ.get('TELEGRAM_TOKEN')
+        chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+        
+    # 如果兩邊都抓不到，回傳 False 讓 UI 顯示錯誤
+    if not token or not chat_id: 
+        return False, "找不到 Telegram Token 或 Chat ID 設定"
+        
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = json.dumps({"chat_id": chat_id, "text": message, "parse_mode": "HTML"}).encode('utf-8')
+    data = json.dumps({"chat_id": str(chat_id), "text": message, "parse_mode": "HTML"}).encode('utf-8')
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-    try: urllib.request.urlopen(req)
-    except: pass
+    
+    try: 
+        urllib.request.urlopen(req)
+        return True, "發送成功"
+    except Exception as e: 
+        return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
 # Prt.02 頁面與 CSS 全域設定
@@ -179,7 +199,6 @@ def main():
     
     df_raw, status_msg = load_csv_data()
     
-    # 🎯 萃取資料庫日期區間
     date_range_str = "尚未載入資料"
     if not df_raw.empty and 'Date' in df_raw.columns:
         valid_dates = df_raw['Date'].dropna()
@@ -199,9 +218,6 @@ def main():
         st.error(status_msg)
         return
 
-    # ==============================
-    # 💡 核心變動：先運算所有股票分數，再渲染側邊欄！
-    # ==============================
     display_list = []
     tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
     
@@ -214,14 +230,10 @@ def main():
                 data['ticker'] = tk
                 display_list.append(data)
         except Exception as e:
-            pass # 這裡先隱藏單檔錯誤，避免破壞主畫面
+            pass
 
-    # 排序：高分到低分
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
-    # ==============================
-    # 🎯 側邊欄控制台 (包含 Show Me The Money 按鈕)
-    # ==============================
     with st.sidebar:
         st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
         st.markdown(f"**📅 歷史資料區間：**\n\n`< {date_range_str} >`")
@@ -231,36 +243,33 @@ def main():
             st.cache_data.clear()
             safe_rerun()
             
-        # 🚀 需求：手動回測與 Telegram 存活通報
         if st.button("▶️ 執行股票回測"):
             with st.spinner("🚀 正在執行判定與通報..."):
-                # 取得當下時間並格式化
                 now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
                 
-                # 組裝 Telegram 訊息頭部
                 msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
                 msg += f"🕒 {now_str} 回測\n"
                 msg += "================\n"
                 
-                # 抓取分數 >= 45 的股票 (Setup 條件)
                 setups = [d for d in display_list if d.get('Score', 0) >= 45]
-                
                 if setups:
                     msg += "🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n"
                     for s in setups:
-                        price = s.get('Close', 0.0)
-                        high_today = s.get('High', 0.0)
-                        msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {high_today:.2f} 買進)\n"
+                        msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進)\n"
                 else:
                     msg += "盤後無新增訊號。\n"
                     
-                # 組裝 Telegram 訊息尾部 (系統存活證明)
                 msg += "================\n"
                 msg += "✅ 系統目前正常運作中"
                 
-                # 發送推播
-                send_telegram_alert(msg)
-                st.success("✅ 回測通報已成功發送至 Telegram！")
+                # 取得執行結果與錯誤訊息
+                is_success, error_reason = send_telegram_alert(msg)
+                
+                if is_success:
+                    st.success("✅ 回測通報已成功發送至 Telegram！")
+                else:
+                    # 如果失敗，會在網頁上顯示原因
+                    st.error(f"❌ 發送失敗：{error_reason}")
 
         st.markdown("---")
         
@@ -273,9 +282,6 @@ def main():
                     st.session_state.custom_watch.append(nt.upper())
                 safe_rerun()
 
-    # ==============================
-    # 開始組裝與渲染 HTML 網格 (主畫面小卡)
-    # ==============================
     html_cards = '<div class="stock-grid">'
     for d in display_list:
         score = d.get('Score', 0)
