@@ -1,8 +1,8 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (視覺修復版)
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (資訊擴充版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.07 (修復 Markdown 縮排導致的 HTML 原始碼外露)
+# 策略版本 : v03.08 (新增資料庫日期區間顯示)
 # ==========================================================
 
 import streamlit as st
@@ -23,7 +23,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.07"
+APP_VERSION = "v03.08"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -178,6 +178,38 @@ def main():
     
     df_raw, status_msg = load_csv_data()
     
+    # 🎯 計算並萃取資料庫的日期區間
+    date_range_str = "尚未載入資料"
+    if not df_raw.empty and 'Date' in df_raw.columns:
+        valid_dates = df_raw['Date'].dropna()
+        if not valid_dates.empty:
+            min_date = valid_dates.min().strftime('%Y/%m/%d')
+            max_date = valid_dates.max().strftime('%Y/%m/%d')
+            date_range_str = f"{min_date} ~ {max_date}"
+
+    # 🎯 將側邊欄移入 main 內，並顯示日期區間
+    with st.sidebar:
+        st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
+        
+        # 顯示資料日期區間 (使用 Markdown 標籤修飾)
+        st.markdown(f"**📅 歷史資料區間：**\n\n`< {date_range_str} >`")
+        st.markdown("---")
+        
+        if st.button("🔄 刷新數據"): 
+            st.cache_data.clear()
+            safe_rerun()
+            
+        with st.form("add_tk"):
+            nt = st.text_input("新增代號 (例: 2330.TW)")
+            if st.form_submit_button("➕ 加入監控") and nt:
+                if 'custom_watch' not in st.session_state: 
+                    st.session_state.custom_watch = []
+                # 小優化：避免重複加入同一檔自訂股票
+                if nt.upper() not in st.session_state.custom_watch:
+                    st.session_state.custom_watch.append(nt.upper())
+                safe_rerun()
+
+    # 處理自訂股票並與主資料聯集
     combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
     if 'custom_watch' in st.session_state:
         for ct in st.session_state.custom_watch:
@@ -214,11 +246,9 @@ def main():
         price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
         high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
         
-        # 移除了所有多餘縮排，防止 Markdown 解析成程式碼區塊
         action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>' if score >= 45 else f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
         rsi_msg = "🚀 強勢多頭排列" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else ""
 
-        # 這裡的 HTML 完全攤平，使用字串串接確保不包含換行後的縮排
         card = (
             f'<div class="stock-card">'
             f'<div class="stock-header">'
@@ -241,20 +271,6 @@ def main():
         
     html_cards += '</div>'
     st.markdown(html_cards, unsafe_allow_html=True)
-
-# 側邊欄控制
-with st.sidebar:
-    st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
-    if st.button("🔄 刷新數據"): 
-        st.cache_data.clear()
-        safe_rerun()
-    with st.form("add_tk"):
-        nt = st.text_input("新增代號 (例: 2330.TW)")
-        if st.form_submit_button("➕ 加入監控") and nt:
-            if 'custom_watch' not in st.session_state: 
-                st.session_state.custom_watch = []
-            st.session_state.custom_watch.append(nt.upper())
-            safe_rerun()
 
 if __name__ == "__main__":
     main()
