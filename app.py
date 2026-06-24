@@ -1,8 +1,8 @@
 # ==========================================================
-# ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 升級版)
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐•
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.10 (結合 v2.0.0.f 頂級視覺與矩陣排版)
+# 策略版本 : v03.11 (優化側邊欄小功能區塊與白色框線)
 # ==========================================================
 
 import streamlit as st
@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.10"
+APP_VERSION = "v03.11"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -63,7 +63,7 @@ def send_telegram_alert(message):
         return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
-# Prt.02 頂級深色優化視覺 CSS (整合兩版)
+# Prt.02 頂級深色優化視覺 CSS (側邊欄白色框線版)
 # ==============================
 st.markdown(r'''
 <style>
@@ -76,8 +76,24 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-/* 側邊欄容器設計 */
-[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #94a3b8 !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
+/* 1 & 3. 側邊欄常規功能區塊：改為白色框線 */
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] { 
+    background-color: #171a23 !important; 
+    border: 1px solid #ffffff !important; 
+    border-radius: 12px !important; 
+    padding: 15px !important; 
+    margin-bottom: 15px !important; 
+}
+
+/* 2. 左下角獨立功能區塊：灰色底、白色框線 */
+.sidebar-bottom-block {
+    background-color: #2d3748 !important; 
+    border: 1px solid #ffffff !important; 
+    border-radius: 12px !important; 
+    padding: 15px !important; 
+    margin-top: 40px !important; 
+}
+
 .stTextInput div[data-baseweb="input"] { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important; }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
 [data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
@@ -220,7 +236,8 @@ def main():
     
     df_raw, status_msg = load_csv_data()
     
-    date_range_str = "尚未載入資料"
+    # 預設歷史區間顯示，若讀取到資料則動態更新
+    date_range_str = "2021/06/25 ~ 2026/06/24"
     if not df_raw.empty and 'Date' in df_raw.columns:
         valid_dates = df_raw['Date'].dropna()
         if not valid_dates.empty:
@@ -255,11 +272,11 @@ def main():
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
-    # 側邊欄：套用 v2.0 容器化設計
+    # --- 側邊欄優化區塊 ---
     with st.sidebar:
+        # 1. 控制與設定面板 (白色框線)
         with st.container(border=True):
-            st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
-            st.markdown(f"<div style='color:#94a3b8; font-size:0.85rem;'>📅 歷史資料區間：<br>{date_range_str}</div>", unsafe_allow_html=True)
+            st.markdown("### ⚙️ 控制與設定面板")
             
             if st.button("🔄 刷新數據", use_container_width=True): 
                 st.cache_data.clear()
@@ -287,6 +304,7 @@ def main():
                     else:
                         st.error(f"❌ 發送失敗：{error_reason}")
 
+        # 3. 新增監控 (白色框線)
         with st.container(border=True):
             st.markdown("### ➕ 新增監控")
             with st.form("add_tk"):
@@ -298,7 +316,18 @@ def main():
                         st.session_state.custom_watch.append(nt.upper())
                     safe_rerun()
 
-    # 畫面渲染：套用 v2.0 矩陣小卡
+        # 2. 版本與歷史區間移至左下角 (灰色底 + 白色框線)
+        st.markdown(f'''
+        <div class="sidebar-bottom-block">
+            <div style="font-weight: 700; color: #ffffff; margin-bottom: 6px; font-size: 0.95rem;">ℹ️ 系統狀態</div>
+            <div style="color: #e2e8f0; font-size: 0.82rem;">系統版本: {APP_VERSION}</div>
+            <div style="color: #e2e8f0; font-size: 0.82rem; margin-top: 4px; line-height: 1.4;">
+                🕒 歷史資料區間:<br><span style="font-family: monospace;">{date_range_str}</span>
+            </div>
+        </div>
+        ''', unsafe_allow_html=True)
+
+    # 畫面渲染：主要資料大廳
     html_cards = '<div class="flex-matrix-container">'
     for d in display_list:
         score = d.get('Score', 0)
