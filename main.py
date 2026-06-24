@@ -862,16 +862,13 @@ try:
             # ==============================
             # Prt.12 回測結果寫入
             # ==============================
-            # 這裡只做 execute 寫入暫存，【不要】在這裡 commit
-            '''
-            conn.execute('''
-                INSERT INTO trade_records (ticker, entry_date, entry_price, ...)
-                VALUES (?, ?, ?, ...)
-            ''', trade_data)
-            '''
-            
-            # ⚠️ 刪除原本在這裡的 conn.commit() ！！！
-            
+            # 🚀 v02.13 優化：這裡只做 executemany 寫入記憶體暫存，不執行 commit
+            if all_trades:
+                conn.executemany('''
+                    INSERT INTO trade_records (ticker, entry_date, entry_price, entry_score)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', all_trades)              
+           
         except Exception as inner_e:
             # 🚀 v02.13 新增：單檔股票如果發生 yfinance 抓不到資料的小錯誤，跳過它，不要讓整個系統崩潰
             print(f"⚠️ {ticker} 處理異常，已跳過: {inner_e}")
