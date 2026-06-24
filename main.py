@@ -282,17 +282,24 @@ def sync_daily_data(conn):
             print(f"❌ 整理 {ticker} 錯誤: {e}")
 
     if all_records:
-        final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
-        final_df.to_csv("temp_data.csv", index=False)
-        print("✅ 數據已強制導出至 temp_data.csv")
-
-    if all_records:
+        # 1. 先將最新下載的增量數據寫入（或更新）資料庫
         cursor.executemany('''
             INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', all_records)
         conn.commit()
+        print("✅ 最新數據已成功寫入 SQLite 資料庫。")
 
+    # 🚀 【關鍵修復】：不論是初次還是增量，都從資料庫倒出「最完整」的歷史資料覆蓋成 CSV
+    # 這樣 temp_data.csv 就不會被閹割，永遠維持最新的完整5年資料！
+    try:
+        full_df = pd.read_sql_query("SELECT * FROM daily_price ORDER BY ticker, Date ASC", conn)
+        full_df.to_csv("temp_data.csv", index=False)
+        print(f"✅ 完整 5 年最新數據已成功同步匯出至 temp_data.csv (共 {len(full_df)} 筆記錄)")
+    except Exception as csv_e:
+        print(f"❌ 匯出完整 CSV 失敗: {csv_e}")
+
+    # 刪除過期資料
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
     cursor.execute("DELETE FROM alert_log WHERE entry_date < ?", (cutoff_date,))
