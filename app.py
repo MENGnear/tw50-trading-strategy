@@ -1,8 +1,8 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (終極穩定版)
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (裝甲防禦版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.05 (時區對齊、安全排序與指標容錯)
+# 策略版本 : v03.06 (型別強制清洗與單點故障隔離)
 # ==========================================================
 
 import streamlit as st
@@ -12,7 +12,6 @@ import yfinance as yf
 import os
 import json
 import urllib.request
-import datetime
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
@@ -24,8 +23,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.05"
+APP_VERSION = "v03.06"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
+
+# --- 相容性 Rerun 處理 ---
+def safe_rerun():
+    if hasattr(st, 'rerun'): st.rerun()
+    else: st.experimental_rerun()
 
 # ==============================
 # Prt.01 Telegram API 設定
@@ -48,54 +52,53 @@ st.markdown('''
     .stApp { background-color: #0e1117; color: #c9d1d9; }
     .main-title { color: #58a6ff; font-weight: 800; text-align: center; padding-bottom: 20px; border-bottom: 2px solid #30363d; margin-bottom: 20px; }
     .stock-grid { display: flex; flex-wrap: wrap; gap: 15px; justify-content: flex-start; }
-    
-    /* 股票小卡樣式優化 */
-    .stock-card {
-        background: #161b22;
-        border: 1px solid #30363d;
-        border-left: 5px solid #58a6ff;
-        border-radius: 12px;
-        padding: 20px;
-        width: 300px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        transition: transform 0.2s;
-    }
+    .stock-card { background: #161b22; border: 1px solid #30363d; border-left: 5px solid #58a6ff; border-radius: 12px; padding: 20px; width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: transform 0.2s; }
     .stock-card:hover { transform: translateY(-5px); border-left-color: #3fb950; }
-    
     .stock-header { display: flex; justify-content: space-between; align-items: flex-start; }
     .stock-title { font-size: 1.2rem; font-weight: bold; color: #ffffff; }
-    
-    /* 總分大字體 */
     .total-score { font-size: 3.2rem; font-weight: 900; color: #58a6ff; line-height: 1; margin: 12px 0; }
-    
     .stock-price { font-size: 1.4rem; font-weight: bold; color: #ff7b72; margin-bottom: 12px; }
-    
-    /* 分項分數小字體 */
     .sub-scores { font-size: 0.75rem; color: #8b949e; display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; border-top: 1px solid #30363d; padding-top: 10px; }
     .sub-score-item { background: #0d1117; padding: 2px 6px; border-radius: 4px; white-space: nowrap; border: 1px solid #21262d; }
-    
-    /* 黃色建議文字框 */
     .action-text { font-size: 0.95rem; font-weight: bold; color: #f2cc60; background: rgba(242, 204, 96, 0.08); padding: 10px; border-radius: 8px; border: 1px dashed #f2cc60; text-align: center; }
     .action-wait { font-size: 0.95rem; color: #8b949e; background: rgba(139, 148, 158, 0.05); padding: 10px; border-radius: 8px; border: 1px dashed #30363d; text-align: center; }
 </style>
 ''', unsafe_allow_html=True)
 
 # ==============================
-# Prt.03 資料讀取與時區強制中性化
+# Prt.03 資料讀取與暴力清洗
 # ==============================
+def clean_dataframe(df):
+    """ 強制清洗資料，避免字串(逗號)與時區問題 """
+    if df.empty: return df
+    
+    # 統一時間欄位
+    if 'Datetime' in df.columns:
+        df = df.rename(columns={'Datetime': 'Date'})
+        
+    if 'Date' in df.columns:
+        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
+        try:
+            if hasattr(df['Date'].dt, 'tz') and df['Date'].dt.tz is not None:
+                df['Date'] = df['Date'].dt.tz_localize(None)
+        except: pass
+
+    # 強制數值轉換 (剔除逗號，避免 ValueError: Unknown format code 'f')
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
+            
+    return df
+
 @st.cache_data(ttl=60)
 def load_csv_data():
     file_path = "temp_data.csv"
     if not os.path.exists(file_path): return pd.DataFrame(), "⚠️ 找不到資料檔 (temp_data.csv)"
     try:
         df = pd.read_csv(file_path)
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            # 💡 核心修正：若 CSV 內建時區，強制轉換為無時區，避免與 yfinance 聯集時崩潰
-            if df['Date'].dt.tz is not None:
-                df['Date'] = df['Date'].dt.tz_localize(None)
+        df = clean_dataframe(df)
         return df, "✅ 載入成功"
-    except Exception as e: return pd.DataFrame(), f"❌ 錯誤: {e}"
+    except Exception as e: return pd.DataFrame(), f"❌ 讀取錯誤: {e}"
 
 @st.cache_data(ttl=300)
 def fetch_custom_stock(ticker):
@@ -104,25 +107,21 @@ def fetch_custom_stock(ticker):
         df = stock.history(period="6mo")
         if df.empty: return None
         df = df.reset_index()
-        if 'Date' in df.columns:
-            df['Date'] = pd.to_datetime(df['Date'])
-            if df['Date'].dt.tz is not None:
-                df['Date'] = df['Date'].dt.tz_localize(None)
         df['ticker'] = ticker
-        return df
+        return clean_dataframe(df)
     except: return None
 
 # ==============================
-# Prt.04 技術指標與 v02.12 評分安全計算
+# Prt.04 技術指標與 v02.12 安全評分
 # ==============================
 def calculate_v0212_score(df_stock):
-    df = df_stock.sort_values('Date').copy()
+    df = df_stock.dropna(subset=['Close']).sort_values('Date').copy()
     if len(df) < 2: return None
 
-    # 基礎指標計算 (使用動態 window 避免天數極端不足時出錯)
-    df['MA20'] = df['Close'].rolling(window=min(20, len(df))).mean()
-    df['MA60'] = df['Close'].rolling(window=min(60, len(df))).mean()
-    df['V_MA5'] = df['Volume'].rolling(window=min(5, len(df))).mean()
+    # 均線安全計算 (補0以防爆開)
+    df['MA20'] = df['Close'].rolling(window=min(20, len(df))).mean().fillna(0)
+    df['MA60'] = df['Close'].rolling(window=min(60, len(df))).mean().fillna(0)
+    df['V_MA5'] = df['Volume'].rolling(window=min(5, len(df))).mean().fillna(0)
     
     # MACD 結構計算
     if len(df) >= 26:
@@ -130,33 +129,39 @@ def calculate_v0212_score(df_stock):
         ema26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['DIF'] = ema12 - ema26
         df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = df['DIF'] - df['DEA']
+        df['MACD_Hist'] = (df['DIF'] - df['DEA']).fillna(0)
     else:
         df['MACD_Hist'] = 0.0
 
     today = df.iloc[-1]
     yest = df.iloc[-2] if len(df) > 1 else today
 
-    # --- 五大評分邏輯安全萃取 ---
-    t1 = 15 if ('MACD_Hist' in today and 'MACD_Hist' in yest and pd.notna(today['MACD_Hist']) and pd.notna(yest['MACD_Hist']) and today['MACD_Hist'] > yest['MACD_Hist']) else 0
-    m1 = 10 if ('MA20' in today and pd.notna(today['MA20']) and today['Close'] > today['MA20']) else 0
-    
-    # 5日均線斜率計算安全防護
-    m2 = 0
-    if len(df) >= 6 and 'MA20' in df.columns:
-        ma20_past = df['MA20'].iloc[-6]
-        if pd.notna(today['MA20']) and pd.notna(ma20_past) and ma20_past != 0:
-            m2 = 15 if (today['MA20'] / ma20_past - 1) > 0.01 else 0
-            
-    m3 = 10 if ('MA20' in today and 'MA60' in today and pd.notna(today['MA20']) and pd.notna(today['MA60']) and today['MA20'] > today['MA60']) else 0
-    v1 = 10 if ('Volume' in today and 'V_MA5' in today and pd.notna(today['Volume']) and pd.notna(today['V_MA5']) and today['Volume'] > today['V_MA5'] * 1.3) else 0
-    
-    total_score = t1 + m1 + m2 + m3 + v1
+    # 提取安全數值，避免 KeyError 
+    today_close = today.get('Close', 0)
+    today_vol = today.get('Volume', 0)
+    today_macd = today.get('MACD_Hist', 0)
+    yest_macd = yest.get('MACD_Hist', 0)
+    today_ma20 = today.get('MA20', 0)
+    today_ma60 = today.get('MA60', 0)
+    today_vma5 = today.get('V_MA5', 0)
 
-    # 三重 RSI 計算
-    df['RSI_6'] = 50.0
-    df['RSI_14'] = 50.0
-    df['RSI_24'] = 50.0
+    # --- 五大評分邏輯 (完全拔除異常風險) ---
+    t1 = 15 if (today_macd > yest_macd) else 0
+    m1 = 10 if (today_ma20 > 0 and today_close > today_ma20) else 0
+    
+    m2 = 0
+    if len(df) >= 6:
+        ma20_past = df['MA20'].iloc[-6]
+        if ma20_past > 0 and ((today_ma20 / ma20_past) - 1) > 0.01:
+            m2 = 15
+            
+    m3 = 10 if (today_ma60 > 0 and today_ma20 > today_ma60) else 0
+    v1 = 10 if (today_vma5 > 0 and today_vol > (today_vma5 * 1.3)) else 0
+    
+    total_score = int(t1 + m1 + m2 + m3 + v1)
+
+    # RSI 計算
+    df['RSI_6'], df['RSI_14'], df['RSI_24'] = 50.0, 50.0, 50.0
     if len(df) >= 24:
         delta = df['Close'].diff()
         up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
@@ -165,12 +170,16 @@ def calculate_v0212_score(df_stock):
             ema_down = down.ewm(com=p-1, adjust=False).mean()
             df[f'RSI_{p}'] = 100 - (100 / (1 + ema_up / ema_down.replace(0, 1e-9)))
     
-    res = today.to_dict()
-    res.update({
-        'Score': int(total_score),
+    res = {
+        'Date': today.get('Date', pd.Timestamp.now()),
+        'Close': today_close,
+        'High': today.get('High', 0),
+        'Score': total_score,
         's1': t1, 's2': m1, 's3': m2, 's4': m3, 's5': v1,
-        'RSI_6': df['RSI_6'].iloc[-1], 'RSI_14': df['RSI_14'].iloc[-1], 'RSI_24': df['RSI_24'].iloc[-1]
-    })
+        'RSI_6': df['RSI_6'].iloc[-1], 
+        'RSI_14': df['RSI_14'].iloc[-1], 
+        'RSI_24': df['RSI_24'].iloc[-1]
+    }
     return res
 
 # ==============================
@@ -182,33 +191,34 @@ def main():
     
     df_raw, status_msg = load_csv_data()
     
-    # 處理自訂關注股票
     combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
     if 'custom_watch' in st.session_state:
         for ct in st.session_state.custom_watch:
             cdf = fetch_custom_stock(ct)
-            if cdf is not None:
+            if cdf is not None and not cdf.empty:
                 combined_df = pd.concat([combined_df, cdf], ignore_index=True)
 
     if combined_df.empty:
         st.error(status_msg)
         return
 
-    # 計算並整理所有標的數據
     display_list = []
     tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
     
+    # 🎯 核心防禦：隔離運算，單檔股票壞掉不影響全局
     for tk in tickers:
-        df_tk = combined_df[combined_df['ticker'] == tk]
-        data = calculate_v0212_score(df_tk)
-        if data:
-            data['ticker'] = tk
-            display_list.append(data)
+        if pd.isna(tk): continue # 跳過無效代號
+        try:
+            df_tk = combined_df[combined_df['ticker'] == tk]
+            data = calculate_v0212_score(df_tk)
+            if data:
+                data['ticker'] = tk
+                display_list.append(data)
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ 標的 {tk} 資料解析異常，已暫時跳過。")
 
-    # 🎯 需求 2：依照分數由高到低進行排序 (加入安全預設值防止型態出錯)
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
-    # 開始組裝與渲染 HTML 網格
     html_cards = '<div class="stock-grid">'
     for d in display_list:
         score = d.get('Score', 0)
@@ -216,21 +226,14 @@ def main():
         high_today = d.get('High', 0.0)
         
         # 安全數值格式化防護
-        price_str = f"NT$ {price:.2f}" if pd.notna(price) else "N/A"
-        high_str = f"{high_today:.2f}" if pd.notna(high_today) else "N/A"
+        price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
+        high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
         
-        # 🎯 需求 1.c：黃字型態建議判斷
-        if score >= 45:
-            action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>'
-        else:
-            action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
+        if score >= 45: action_html = f'<div class="action-text">🎯 明日突破 {high_str} 買進</div>'
+        else: action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
 
-        # 多頭趨勢狀態標記
-        rsi_msg = ""
-        if d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0): 
-            rsi_msg = "🚀 強勢多頭排列"
+        rsi_msg = "🚀 強勢多頭排列" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else ""
 
-        # 🎯 需求 1.a & 1.b：小卡視覺化呈現
         card = f'''
             <div class="stock-card">
                 <div class="stock-header">
@@ -239,7 +242,6 @@ def main():
                 </div>
                 <div class="total-score">{score}</div>
                 <div class="stock-price">{price_str}</div>
-                
                 <div class="sub-scores">
                     <span class="sub-score-item">1.MACD: {d['s1']}</span>
                     <span class="sub-score-item">2.MA20: {d['s2']}</span>
@@ -247,7 +249,6 @@ def main():
                     <span class="sub-score-item">4.趨勢: {d['s4']}</span>
                     <span class="sub-score-item">5.量: {d['s5']}</span>
                 </div>
-                
                 {action_html}
             </div>
         '''
@@ -261,14 +262,14 @@ with st.sidebar:
     st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
     if st.button("🔄 刷新數據"): 
         st.cache_data.clear()
-        st.rerun()
+        safe_rerun()
     with st.form("add_tk"):
         nt = st.text_input("新增代號 (例: 2330.TW)")
         if st.form_submit_button("➕ 加入監控") and nt:
             if 'custom_watch' not in st.session_state: 
                 st.session_state.custom_watch = []
             st.session_state.custom_watch.append(nt.upper())
-            st.rerun()
+            safe_rerun()
 
 if __name__ == "__main__":
     main()
