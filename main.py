@@ -20,39 +20,6 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==============================
 
-# ==============================
-# 章節索引
-# ==============================
-# Prt.00 系統設定與套件匯入
-# Prt.01 Telegram通知模組
-# Prt.02 SQLite資料庫管理
-# Prt.03 技術指標計算
-# Prt.04 Setup與進場邏輯
-# Prt.05 持倉管理與出場邏輯
-# Prt.06 歷史資料同步
-# Prt.07 回測主控引擎
-# Prt.08 個股回測流程
-# Prt.09 訊號判斷
-# Prt.10 Trigger推播
-# Prt.11 Watchlist推播
-# Prt.12 回測結果寫入
-# Prt.13 Telegram訊息組裝
-# Prt.14 發送Telegram
-# Prt.15 主程式入口
-# ==============================
-
-# ==============================
-# Prt.00 系統全域設定與套件匯入
-# ==============================
-#
-# 載入程式執行所需套件
-# 設定 Telegram Token
-# 設定資料庫名稱
-# 設定策略版本
-# 建立台灣50股票清單
-#
-# ==============================
-
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -79,17 +46,7 @@ TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 # ==============================
 # Prt.01 Telegram 通知功能
 # ==============================
-#
-# 負責將訊息推送到 Telegram
-#
-# 用途：
-# 當產生交易訊號時
-# 將結果即時通知使用者
-#
-# ==============================
-
 def send_telegram_alert(message):
-    
     token = os.environ.get('TELEGRAM_TOKEN')
     chat_id = os.environ.get('TELEGRAM_CHAT_ID')
     
@@ -107,10 +64,7 @@ def send_telegram_alert(message):
     
     req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
     try:
-        urllib.request.urlopen(
-            req,
-            timeout=15
-        )
+        urllib.request.urlopen(req, timeout=15)
         print("✅ Telegram 推播成功！")
     except Exception as e:
         print(f"❌ Telegram 推播失敗: {e}")
@@ -118,32 +72,9 @@ def send_telegram_alert(message):
 # ==============================
 # Prt.02 SQLite 資料庫管理
 # ==============================
-#
-# 建立資料庫
-# 建立資料表
-# 執行資料庫升級
-#
-# ==============================
-
 def init_db(db_name="tw50_strategy.db"):
-    
     conn = sqlite3.connect(db_name)
     cursor = conn.cursor()
-    
-    # ==============================
-    # Prt.02.1 daily_price 資料表
-    # ==============================
-    #
-    # 儲存股票歷史價格
-    #
-    # 包含：
-    # 開盤價
-    # 最高價
-    # 最低價
-    # 收盤價
-    # 成交量
-    #
-    # ==============================
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS daily_price (
@@ -152,79 +83,34 @@ def init_db(db_name="tw50_strategy.db"):
         )
     ''')
     
-    # ==============================
-    # Prt.02.2 backtest_trades 資料表
-    # ==============================
-    #
-    # 儲存回測交易紀錄
-    #
-    # 包含：
-    # 進場日期
-    # 出場日期
-    # 進場價格
-    # 出場價格
-    # 報酬率
-    #
-    # ==============================
-    
     cursor.execute('''
-        
         CREATE TABLE IF NOT EXISTS backtest_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-        
             version TEXT,
             ticker TEXT,
-        
             entry_date TEXT,
             exit_date TEXT,
-        
             entry_price REAL,
             exit_price REAL,
-        
             profit_pct REAL,
-        
             holding_bars INTEGER,
-        
             max_profit_pct REAL,
             trade_max_drawdown_pct REAL,
-        
             entry_score REAL
         )
-        
     ''')
 
-    # ==============================
-    # Prt.02.3 alert_log 資料表
-    # ==============================
-    #
-    # 記錄已推播訊號
-    #
-    # 避免同一天重複通知
-    #
-    # ==============================
-    
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS alert_log (
             strategy_version TEXT,
             ticker TEXT,
             entry_date TEXT,
-            PRIMARY KEY (
-                strategy_version,
-                ticker,
-                entry_date
-            )
+            PRIMARY KEY (strategy_version, ticker, entry_date)
         )
     ''')
     
-    # ==============================
-    # Prt.02.4 Schema Migration
-    # ==============================
-    
     try:
-        cursor.execute(
-            "ALTER TABLE backtest_trades "
-            "ADD COLUMN trade_max_drawdown_pct REAL"
-        )
+        cursor.execute("ALTER TABLE backtest_trades ADD COLUMN trade_max_drawdown_pct REAL")
     except sqlite3.OperationalError:
         pass
     
@@ -232,469 +118,132 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==============================
-# Prt.03 技術指標計算
+# Prt.03 技術指標計算與回測
 # ==============================
-#
-# 計算策略所需技術指標
-#
-# 包含：
-# MA20
-# MA60
-# MACD
-# Score
-#
-# ==============================
-
 def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
-    # ==============================
-    # Prt.03.1 MA20
-    # ==============================
-    #
-    # 計算20日均線
-    #
-    # 觀察短期趨勢方向
-    #
-    # ==============================
     df['MA20'] = df['Close'].rolling(20).mean()
-    
-    # ==============================
-    # Prt.03.2 MA60
-    # ==============================
-    #
-    # 計算60日均線
-    #
-    # 觀察中期趨勢方向
-    #
-    # ==============================
     df['MA60'] = df['Close'].rolling(60).mean()
-    
-    # ==============================
-    # Prt.03.3 V_MA5
-    # ==============================
     df['V_MA5'] = df['Volume'].rolling(5).mean()
 
-    # ==============================
-    # Prt.03.4 MACD
-    # ==============================
-    #
-    # 計算 MACD 指標
-    #
-    # 判斷市場動能是否增強
-    #
-    # ==============================
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # ==============================
-    # Prt.03.5 Score 評分系統
-    # ==============================
-    #
-    # 將多項條件加總成分數
-    #
-    # 分數越高
-    # 代表股票越符合策略條件
-    #
-    # ==============================
-
-    # MACD 柱體持續放大
-    # 代表短期動能增強
     t1 = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
-    
-    # 股價站上 MA20
-    # 代表短期趨勢偏多 
     m1 = (df['Close'] > df['MA20']).astype(int) * 10                    
-    
-    # MA20 五日斜率大於 1%
-    # 代表均線開始向上
     m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
-    
-    # MA20 位於 MA60 之上
-    # 代表中期趨勢偏多
     m3 = (df['MA20'] > df['MA60']).astype(int) * 10                      
-    
-    # 成交量高於平均量
-    # 代表市場開始關注
     v1 = (df['Volume'] > df['V_MA5'] * 1.3).astype(int) * 10            
     
-    # Score Range : 0 ~ 60
     df['Score'] = t1 + m1 + m2 + m3 + v1
     
     trades = []
     in_position = False
-    
     entry_price = signal_day_high = entry_score = 0
     entry_date = None
     peak_price = 0
     entry_idx = 0
     trade_max_drawdown = 0.0
-    
-# ==============================
-# Prt.04 Setup 與進場邏輯
-# ==============================
-#
-# 找出符合條件的股票
-#
-# 當 Score 首次達標
-# 建立 Setup
-#
-# 等待後續突破進場
-#
-# ==============================
     setup_active = False
-    signal_day_high = 0
-    entry_score = 0
 
     for i in range(65, len(df)-1):
-
         yesterday = df.iloc[i-1]
         today = df.iloc[i]
         tomorrow = df.iloc[i+1]
 
         if not in_position:
-
-            # ==============================
-            # Prt.04.1 建立 Setup
-            # ==============================
-            #
-            # 當分數首次達到門檻
-            #
-            # 記錄：
-            # Setup 日期
-            # Setup 高點
-            #
-            # ==============================
-            if (
-                not setup_active
-                and today['Score'] >= 45
-                and yesterday['Score'] < 45
-            ):
+            if not setup_active and today['Score'] >= 45 and yesterday['Score'] < 45:
                 setup_active = True
                 signal_day_high = today['High']
                 entry_score = today['Score']
 
-            # ==============================
-            # Prt.04.2 Setup 等待突破
-            # ==============================
-            #
-            # Setup 建立後
-            # 持續觀察是否突破 Setup 高點
-            #
-            # 若分數跌回門檻以下
-            # 取消本次 Setup
-            #
-            # ==============================
-            
             if setup_active:
-
                 if today['Score'] < 45:
                     setup_active = False
-
-            # ==============================
-            # Prt.04.3 Buy Stop 突破進場
-            # ==============================
-            #
-            # 使用突破高點方式進場
-            #
-            # 當後續價格突破 Setup 高點
-            # 視為正式買進
-            #
-            # ============================== 
-                
                 elif tomorrow['High'] > signal_day_high:
                     in_position = True
                     setup_active = False
-
-            # ==============================
-            # Buy Stop 成交模型
-            # ==============================
-            #
-            # 跳空開高：
-            # 使用開盤價成交
-            #
-            # 一般突破：
-            # 使用 Setup 當天高點成交
-            # ==============================
-                    
-                    entry_price = max(
-                        tomorrow['Open'],
-                        signal_day_high
-                    )
-
+                    entry_price = max(tomorrow['Open'], signal_day_high)
                     entry_date = tomorrow['Date']
                     entry_idx = i + 1
                     peak_price = entry_price
                     trade_max_drawdown = 0.0
-
-# ==============================
-# Prt.05 持倉管理與出場邏輯
-# ==============================
-#
-# 買進後開始追蹤持倉狀態
-#
-# 包含：
-# 停損
-# MDD
-# 均線出場
-#
-# ==============================
-      
         else:
-
-            # ==============================
-            # Prt.05.1 更新持倉最高價
-            # ==============================
-            #
-            # 記錄買進後曾經出現過的最高價格
-            #
-            # 後續計算 MDD 會使用
-            #
-            # ==============================
-
-            peak_price = max(
-                peak_price,
-                tomorrow['High']
-            )
-
-            # ==============================
-            # Prt.05.2 計算交易期間最大跌幅
-            # ==============================
-            #
-            # 記錄買進後
-            # 從最高點曾經跌下來多少
-            #
-            # 用來觀察這筆交易過程中的風險
-            #
-            # ==============================
-
-            trade_max_drawdown = min(
-                trade_max_drawdown,
-                (tomorrow['Low'] - peak_price) / peak_price
-            )
-
-            # ==============================
-            # Prt.05.3 停損設定 8%
-            # ==============================
+            peak_price = max(peak_price, tomorrow['High'])
+            trade_max_drawdown = min(trade_max_drawdown, (tomorrow['Low'] - peak_price) / peak_price)
             stop_loss_price = entry_price * 0.92
 
-            # ==============================
-            # Prt.05.4 停損檢查
-            # ==============================
-            #
-            # 跌破停損價格
-            # 強制出場
-            #
-            # 避免虧損持續擴大
-            # 
-            # ==============================
             if tomorrow['Low'] <= stop_loss_price:
-
-                exit_price = min(
-                    tomorrow['Open'],
-                    stop_loss_price
-                )
-
+                exit_price = min(tomorrow['Open'], stop_loss_price)
                 exit_date = tomorrow['Date']
-                profit_pct = (
-                    exit_price - entry_price
-                ) / entry_price
-
-                holding_bars = (
-                    i + 1
-                ) - entry_idx
-
-                max_p = (
-                    peak_price - entry_price
-                ) / entry_price
-
-                trade_max_drawdown_pct = (
-                    trade_max_drawdown * 100
-                )
-            # ==============================
-            # Prt.05.5 停損出場紀錄
-            # ==============================
-                trades.append(
-                    (
-                        strategy_version,
-                        ticker,
-                        entry_date.strftime('%Y-%m-%d'),
-                        exit_date.strftime('%Y-%m-%d'),
-                        entry_price,
-                        exit_price,
-                        profit_pct,
-                        holding_bars,
-                        max_p,
-                        trade_max_drawdown_pct,
-                        entry_score
-                    )
-                )
-
+                profit_pct = (exit_price - entry_price) / entry_price
+                holding_bars = (i + 1) - entry_idx
+                max_p = (peak_price - entry_price) / entry_price
+                trade_max_drawdown_pct = (trade_max_drawdown * 100)
+                
+                trades.append((
+                    strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
+                    entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+                ))
                 in_position = False
-
-            # ==============================
-            # Prt.05.6 月線跌破出場
-            # ==============================
-            #
-            # 收盤跌破 MA20
-            #
-            # 視為趨勢轉弱
-            # 執行出場
-            #
-            # ==============================
 
             elif tomorrow['Close'] < tomorrow['MA20']:
-            
                 if i + 2 < len(df):
-            
                     next_day = df.iloc[i + 2]
-            
                     exit_price = next_day['Open']
                     exit_date = next_day['Date']
-                    profit_pct = (
-                        exit_price - entry_price
-                    ) / entry_price
-            
-                    holding_bars = (
-                        i + 2
-                    ) - entry_idx
-            
-                    temp_peak = max(
-                        peak_price,
-                        next_day['High']
-                    )
-            
-                    temp_drawdown = (
-                        next_day['Low'] - temp_peak
-                    ) / temp_peak
-            
-                    final_mdd = min(
-                        trade_max_drawdown,
-                        temp_drawdown
-                    )
-            
-                    max_p = (
-                        temp_peak - entry_price
-                    ) / entry_price
-            
+                    profit_pct = (exit_price - entry_price) / entry_price
+                    holding_bars = (i + 2) - entry_idx
+                    temp_peak = max(peak_price, next_day['High'])
+                    temp_drawdown = (next_day['Low'] - temp_peak) / temp_peak
+                    final_mdd = min(trade_max_drawdown, temp_drawdown)
+                    max_p = (temp_peak - entry_price) / entry_price
                 else:
-                    # 回測最後一天沒有下一根K棒
-                    # 使用最後收盤價出場
-            
                     last_day = df.iloc[-1]
-            
                     exit_price = last_day['Close']
                     exit_date = last_day['Date']
-            
-                    profit_pct = (
-                        exit_price - entry_price
-                    ) / entry_price
-            
-                    holding_bars = (
-                        len(df) - 1
-                    ) - entry_idx
-            
-                    temp_peak = max(
-                        peak_price,
-                        last_day['High']
-                    )
-            
-                    temp_drawdown = (
-                        last_day['Low'] - temp_peak
-                    ) / temp_peak
-            
-                    final_mdd = min(
-                        trade_max_drawdown,
-                        temp_drawdown
-                    )
-            
-                    max_p = (
-                        temp_peak - entry_price
-                    ) / entry_price
+                    profit_pct = (exit_price - entry_price) / entry_price
+                    holding_bars = (len(df) - 1) - entry_idx
+                    temp_peak = max(peak_price, last_day['High'])
+                    temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
+                    final_mdd = min(trade_max_drawdown, temp_drawdown)
+                    max_p = (temp_peak - entry_price) / entry_price
             
                 trade_max_drawdown_pct = final_mdd * 100
-            
-                trades.append(
-                    (
-                        strategy_version,
-                        ticker,
-                        entry_date.strftime('%Y-%m-%d'),
-                        exit_date.strftime('%Y-%m-%d'),
-                        entry_price,
-                        exit_price,
-                        profit_pct,
-                        holding_bars,
-                        max_p,
-                        trade_max_drawdown_pct,
-                        entry_score
-                    )
-                )
-            
+                trades.append((
+                    strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
+                    entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+                ))
                 in_position = False
                     
-            # ==============================
-            # Prt.05.7 回測期末強制平倉
-            # ==============================
-            #
-            # 若最後一天仍持有股票
-            #
-            # 使用最後收盤價平倉
-            #
-            # ==============================
     if in_position:
         last_day = df.iloc[-1]
         exit_price = last_day['Close']
         exit_date = last_day['Date']
         profit_pct = (exit_price - entry_price) / entry_price
         holding_bars = (len(df) - 1) - entry_idx
-        
         temp_peak = max(peak_price, last_day['High'])
         temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
         final_mdd = min(trade_max_drawdown, temp_drawdown)
         max_p = (temp_peak - entry_price) / entry_price
-        
         trade_max_drawdown_pct = final_mdd * 100
-        trades.append(
-            (
-                strategy_version,
-                ticker,
-                entry_date.strftime('%Y-%m-%d'),
-                exit_date.strftime('%Y-%m-%d'),
-                entry_price,
-                exit_price,
-                profit_pct,
-                holding_bars,
-                max_p,
-                trade_max_drawdown_pct,
-                entry_score
-            )
-        )
+        trades.append((
+            strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
+            entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+        ))
         
     return trades, df
 
 # ==============================
 # Prt.06 歷史資料同步
 # ==============================
-#
-# Prt.06 歷史資料同步
-#
-# 從 Yahoo Finance 下載最新股價資料
-#
-# 寫入 SQLite 資料庫
-#
-# 並清除五年前的舊資料
-#
-# ==============================
-
 def sync_daily_data(conn):
-    
     cursor = conn.cursor()
     today = datetime.datetime.now(TAIPEI_TZ)
-    
-    # 💡 讀取 GitHub Actions 傳來的強制重設開關
     force_reset = os.environ.get('FORCE_RESET', 'false').lower() == 'true'
     
     if force_reset:
@@ -705,29 +254,15 @@ def sync_daily_data(conn):
     else:
         cursor.execute("SELECT MAX(Date) FROM daily_price")
         last_date = cursor.fetchone()[0]
-            
-    # ==============================
-    # Prt.06.1 判斷更新區間
-    # ==============================
-    #
-    # 找出資料庫最後日期
-    #
-    # 僅下載缺少資料
-    #
-    # ==============================
 
     if last_date:
         start_date_obj = datetime.datetime.strptime(last_date, '%Y-%m-%d') - datetime.timedelta(days=2)
         start_date = start_date_obj.strftime('%Y-%m-%d')
         print(f"📊 增量更新，抓取區間: {start_date} 至今...")
     else:
-        # 強制重設或初次啟動，抓取 5 年
         start_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
         print(f"⚠️ 初次下載/強制重置，抓取區間: {start_date} 至今...")
 
-    # ==============================
-    # Prt.06.2 下載 Yahoo 資料
-    # ==============================
     end_date = (today + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
     raw_data = yf.download(tw50_tickers, start=start_date, end=end_date, group_by='ticker', progress=False, threads=False)
 
@@ -737,221 +272,138 @@ def sync_daily_data(conn):
             if ticker in raw_data:
                 stock_data = raw_data[ticker].dropna(how='all').copy()
                 if stock_data.empty: 
-                    print(f"⚠️ {ticker} 資料為空，跳過。")
                     continue
-                
                 df = stock_data.reset_index()
-                # 這裡檢查一下欄位名稱是否正確
-                print(f"✅ {ticker} 抓取成功，共有 {len(df)} 筆資料。")
-                
                 df_to_db = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']].copy()
-                
-                # ==========================================
-                # 👇 就是這行關鍵！將 Timestamp 轉成字串格式
-                # ==========================================
                 df_to_db['Date'] = pd.to_datetime(df_to_db['Date']).dt.strftime('%Y-%m-%d')
-                
                 df_to_db.insert(0, 'ticker', ticker)
                 all_records.extend(df_to_db.values.tolist())
-            else:
-                print(f"❌ {ticker} 不在 raw_data 中。")
         except Exception as e:
             print(f"❌ 整理 {ticker} 錯誤: {e}")
 
-    # === 確保資料處理完畢後，強制導出 CSV ===
     if all_records:
         final_df = pd.DataFrame(all_records, columns=['ticker', 'Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
         final_df.to_csv("temp_data.csv", index=False)
-        print("✅ 數據已強制導出至 temp_data.csv，準備執行狀態機。")
-    else:
-        print("❌ 錯誤：all_records 為空，嘗試手動轉存 raw_data...")
-        # 簡單備份一份原始下載資料，確保有檔案可以測試
-        raw_data.to_csv("temp_data.csv") 
+        print("✅ 數據已強制導出至 temp_data.csv")
 
-    # === 將資料庫寫入邏輯完全隔離，使其無法中斷程式 ===
-    print("--- 執行資料庫寫入嘗試 ---")
-    try:
-        # 這裡放入你原本的資料庫寫入邏輯 (例如 db.insert_many...)
-        pass 
-    except Exception as e:
-        print(f"⚠️ 資料庫寫入警告 (已忽略): {e}")
-
-    # === 最後印出結果 ===
-    print("--- 讀取回測績效前 5 名的交易 ---")
-    # (保持你原本後續的輸出邏輯)
-    
-    # ==============================
-    # Prt.06.3 寫入 SQLite
-    # ==============================
-    #
-    # 將下載結果存入 daily_price
-    #
-    # ==============================
-    
-    # 【修正重點：這裡原本多縮排了4個空白，已幫你退回對齊主線】
-    cursor.executemany('''
-        INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', all_records)
-    conn.commit()
-
-    cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
-
-    # ==============================
-    # Prt.06.4 清除五年前資料
-    # ==============================
-    cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
-    conn.commit()
-
-    # ==============================
-    # Prt.06.5 Alert Log 保留五年
-    # ==============================
-    cursor.execute(
-        '''
-        DELETE FROM alert_log
-        WHERE entry_date < ?
-        ''',
-        (cutoff_date,)
-    )
-    conn.commit()
-    
-    # ==============================
-    # Prt.06.6 SQLite VACUUM 月保養
-    # ==============================
-    if today.day == 1:
-
-        # 確保不存在未完成交易
+    if all_records:
+        cursor.executemany('''
+            INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', all_records)
         conn.commit()
 
-        # SQLite 官方建議：
-        # VACUUM 必須於非 Transaction 狀態執行
-        conn.execute("VACUUM")
-
-        print(
-            "🧹 每月 1 號例行保養："
-            "已執行 VACUUM 釋放硬碟空間。"
-        )
-
-# ==============================
-# Prt.07 回測主控引擎
-# ==============================
-print("啟動 TW50 掃描與回測...")
-
-# 這裡應該有您原本的 tickers 陣列初始化，以及推播訊息陣列的宣告
-# alerts_setup = []
-# alerts_trigger = []
-# tickers = [...]
-
-# 🚀 v02.13 新增：開啟大批次交易防護 (Try-Except-Rollback)
-try:
-    # 宣告開始批次交易，讓 SQLite 將接下來的寫入全數暫存在記憶體中
-    conn.execute("BEGIN TRANSACTION")
-
-    # ==============================
-    # Prt.08 個股回測流程
-    # ==============================
-    for ticker in tickers:
-        try:
-            # (這裡保留您原本的抓取資料、Prt.03 指標計算、Prt.04~06 策略邏輯)
-            # df = ... 
-            # calculate_indicators(df) ...
-            
-            # (這裡保留您原本的 Prt.09 訊號判斷、Prt.10 / Prt.11 推播收集)
-            # if setup_active: alerts_setup.append(...)
-            
-            # ==============================
-            # Prt.12 回測結果寫入
-            # ==============================
-            # 🚀 v02.13 優化：這裡只做 executemany 寫入記憶體暫存，不執行 commit
-            if all_trades:
-                conn.executemany('''
-                    INSERT INTO trade_records (ticker, entry_date, entry_price, entry_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', all_trades)              
-           
-        except Exception as inner_e:
-            # 🚀 v02.13 新增：單檔股票如果發生 yfinance 抓不到資料的小錯誤，跳過它，不要讓整個系統崩潰
-            print(f"⚠️ {ticker} 處理異常，已跳過: {inner_e}")
-            continue
-
-    # ==============================
-    # 🎯 迴圈結束：執行大批次落盤 (Batch Commit)
-    # ==============================
-    # 當 50 檔股票全部安全跑完後，才一口氣將記憶體內的資料寫入實體硬碟
+    cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
+    cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
+    cursor.execute("DELETE FROM alert_log WHERE entry_date < ?", (cutoff_date,))
     conn.commit()
-    print("✅ v02.13 效能優化：TW50 全數標的已完成大批次寫入！")
-
-except Exception as main_e:
-    # ==============================
-    # 🚨 全局異常防護：資料庫回滾 (Rollback)
-    # ==============================
-    # 如果迴圈跑到一半發生「斷網、記憶體溢位」等嚴重崩潰，將資料庫恢復到寫入前的乾淨狀態
-    conn.rollback()
-    error_message = f"❌ 系統嚴重崩潰，資料庫已安全回滾！原因: {main_e}"
-    print(error_message)
     
-    # 將嚴重錯誤塞入推播陣列，讓您在 Telegram 也能第一時間收到警報
-    alerts_trigger.append(f"⚠️ <b>資料庫寫入失敗</b>\n{error_message}")
+    if today.day == 1:
+        conn.commit()
+        conn.execute("VACUUM")
+        print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 # ==============================
-# Prt.13 Telegram 訊息組裝
+# Prt.07 回測主控引擎 (封裝成標準函式)
 # ==============================
-#
-# 整理 Trigger 與 Watchlist
-#
-# 合併成最終通知內容
-#
-# ==============================
-    
+def run_0050_batch(conn):
+    print("啟動 TW50 掃描與回測...")
+
+    strategy_version = "v02.12"
+    tickers = tw50_tickers
+    alerts_setup = []
+    alerts_trigger = []
+
+    # 🚀 v02.13 新增：開啟大批次交易防護 (Try-Except-Rollback)
+    try:
+        # 宣告開始批次交易，讓 SQLite 將接下來的寫入全數暫存在記憶體中
+        conn.execute("BEGIN TRANSACTION")
+
+        # ==============================
+        # Prt.08 個股回測流程
+        # ==============================
+        for ticker in tickers:
+            try:
+                # 從資料庫中讀取該個股的歷史價格資料
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT Date, Open, High, Low, Close, Volume FROM daily_price WHERE ticker = ? ORDER BY Date ASC", 
+                    (ticker,)
+                )
+                rows = cursor.fetchall()
+                if not rows:
+                    continue
+                
+                # 將資料轉換回 DataFrame
+                df_ticker = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
+                df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
+                
+                # 執行技術指標計算與策略回測
+                all_trades, df_processed = calculate_v0212_and_backtest(df_ticker, ticker, strategy_version)
+                
+                # 🎯 訊號監控：判斷最新交易日是否符合 Watchlist 條件 (Score >= 45)
+                if not df_processed.empty:
+                    last_row = df_processed.iloc[-1]
+                    if last_row['Score'] >= 45:
+                        alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {last_row['High']:.2f} 買進)")
+                
+                # ==============================
+                # Prt.12 回測結果寫入 (對齊資料表：backtest_trades)
+                # ==============================
+                if all_trades:
+                    conn.executemany('''
+                        INSERT INTO backtest_trades (
+                            version, ticker, entry_date, exit_date, entry_price, exit_price, 
+                            profit_pct, holding_bars, max_profit_pct, trade_max_drawdown_pct, entry_score
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', all_trades)              
+               
+            except Exception as inner_e:
+                print(f"⚠️ {ticker} 處理異常，已跳過: {inner_e}")
+                continue
+
+        # ==============================
+        # 🎯 迴圈結束：執行大批次落盤 (Batch Commit)
+        # ==============================
+        conn.commit()
+        print("✅ v02.13 效能優化：TW50 全數標的已完成大批次寫入！")
+
+    except Exception as main_e:
+        # ==============================
+        # 🚨 全局異常防護：資料庫回滾 (Rollback)
+        # ==============================
+        conn.rollback()
+        error_message = f"❌ 系統嚴重崩潰，資料庫已安全回滾！原因: {main_e}"
+        print(error_message)
+        alerts_trigger.append(f"⚠️ <b>資料庫寫入失敗</b>\n{error_message}")
+
+    # ==============================
+    # Prt.13 Telegram 訊息組裝与發送
+    # ==============================
     msg_parts = [f"📊 <b>{strategy_version} 台股 50 戰情室</b>"]
 
-    # ==============================
-    # Prt.13.1 Watchlist
-    # ==============================
     if alerts_setup:
         msg_parts.append("================\n🎯 <b>潛力起漲預告 (Watchlist)</b>\n" + "\n\n".join(alerts_setup))
 
-    # ==============================
-    # Prt.13.2 Trigger
-    # ==============================
     if alerts_trigger:
         msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n\n".join(alerts_trigger))
 
-    # ==============================
-    # Prt.13.3 無訊號
-    # ==============================
     if not alerts_trigger and not alerts_setup:
         msg_parts.append("\n盤後無新增訊號。")
     
-# ==============================
-# Prt.14 發送 Telegram
-# ==============================
-#
-# 將整理完成訊息送出
-#    
-# ==============================
-    
     send_telegram_alert("\n\n".join(msg_parts))
-    
+
 # ==============================
 # Prt.15 主程式入口
 # ==============================
-#
-# 執行順序：
-#
-# 1. 初始化資料庫
-# 2. 更新歷史資料
-# 3. 執行回測
-# 4. 判斷交易訊號
-# 5. 發送 Telegram
-#
-# ==============================
-
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
+    
+    # 1. 必須先同步每日最新的歷史資料，否則資料庫內永遠是舊資料
+    sync_daily_data(db_connection)
+    
+    # 2. 執行台股 50 大批次掃描與訊號推播
     run_0050_batch(db_connection)
+    
     db_connection.close()
-
-
-
-
