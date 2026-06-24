@@ -1,8 +1,8 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
-# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (資訊擴充版)
+# 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (Show Me The Money 密技版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.08 (新增資料庫日期區間顯示)
+# 策略版本 : v03.09 (新增手動回測與 Telegram 存活通報)
 # ==========================================================
 
 import streamlit as st
@@ -12,6 +12,7 @@ import yfinance as yf
 import os
 import json
 import urllib.request
+import datetime
 import pytz
 from streamlit_autorefresh import st_autorefresh
 
@@ -23,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.08"
+APP_VERSION = "v03.09"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -178,7 +179,7 @@ def main():
     
     df_raw, status_msg = load_csv_data()
     
-    # 🎯 計算並萃取資料庫的日期區間
+    # 🎯 萃取資料庫日期區間
     date_range_str = "尚未載入資料"
     if not df_raw.empty and 'Date' in df_raw.columns:
         valid_dates = df_raw['Date'].dropna()
@@ -187,29 +188,6 @@ def main():
             max_date = valid_dates.max().strftime('%Y/%m/%d')
             date_range_str = f"{min_date} ~ {max_date}"
 
-    # 🎯 將側邊欄移入 main 內，並顯示日期區間
-    with st.sidebar:
-        st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
-        
-        # 顯示資料日期區間 (使用 Markdown 標籤修飾)
-        st.markdown(f"**📅 歷史資料區間：**\n\n`< {date_range_str} >`")
-        st.markdown("---")
-        
-        if st.button("🔄 刷新數據"): 
-            st.cache_data.clear()
-            safe_rerun()
-            
-        with st.form("add_tk"):
-            nt = st.text_input("新增代號 (例: 2330.TW)")
-            if st.form_submit_button("➕ 加入監控") and nt:
-                if 'custom_watch' not in st.session_state: 
-                    st.session_state.custom_watch = []
-                # 小優化：避免重複加入同一檔自訂股票
-                if nt.upper() not in st.session_state.custom_watch:
-                    st.session_state.custom_watch.append(nt.upper())
-                safe_rerun()
-
-    # 處理自訂股票並與主資料聯集
     combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
     if 'custom_watch' in st.session_state:
         for ct in st.session_state.custom_watch:
@@ -221,6 +199,9 @@ def main():
         st.error(status_msg)
         return
 
+    # ==============================
+    # 💡 核心變動：先運算所有股票分數，再渲染側邊欄！
+    # ==============================
     display_list = []
     tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
     
@@ -233,10 +214,68 @@ def main():
                 data['ticker'] = tk
                 display_list.append(data)
         except Exception as e:
-            st.sidebar.warning(f"⚠️ 標的 {tk} 資料解析異常。")
+            pass # 這裡先隱藏單檔錯誤，避免破壞主畫面
 
+    # 排序：高分到低分
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
+    # ==============================
+    # 🎯 側邊欄控制台 (包含 Show Me The Money 按鈕)
+    # ==============================
+    with st.sidebar:
+        st.markdown(f"### ⚙️ 控制台 ({APP_VERSION})")
+        st.markdown(f"**📅 歷史資料區間：**\n\n`< {date_range_str} >`")
+        st.markdown("---")
+        
+        if st.button("🔄 刷新數據"): 
+            st.cache_data.clear()
+            safe_rerun()
+            
+        # 🚀 需求：手動回測與 Telegram 存活通報
+        if st.button("▶️ 執行股票回測"):
+            with st.spinner("🚀 正在執行判定與通報..."):
+                # 取得當下時間並格式化
+                now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
+                
+                # 組裝 Telegram 訊息頭部
+                msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
+                msg += f"🕒 {now_str} 回測\n"
+                msg += "================\n"
+                
+                # 抓取分數 >= 45 的股票 (Setup 條件)
+                setups = [d for d in display_list if d.get('Score', 0) >= 45]
+                
+                if setups:
+                    msg += "🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n"
+                    for s in setups:
+                        price = s.get('Close', 0.0)
+                        high_today = s.get('High', 0.0)
+                        msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {high_today:.2f} 買進)\n"
+                else:
+                    msg += "盤後無新增訊號。\n"
+                    
+                # 組裝 Telegram 訊息尾部 (系統存活證明)
+                msg += "================\n"
+                msg += "✅ 系統目前正常運作中"
+                
+                # 發送推播
+                send_telegram_alert(msg)
+                st.success("✅ 回測通報已成功發送至 Telegram！")
+
+        st.markdown("---")
+        
+        with st.form("add_tk"):
+            nt = st.text_input("新增代號 (例: 2330.TW)")
+            if st.form_submit_button("➕ 加入監控") and nt:
+                if 'custom_watch' not in st.session_state: 
+                    st.session_state.custom_watch = []
+                if nt.upper() not in st.session_state.custom_watch:
+                    st.session_state.custom_watch.append(nt.upper())
+                safe_rerun()
+
+    # ==============================
+    # 開始組裝與渲染 HTML 網格 (主畫面小卡)
+    # ==============================
     html_cards = '<div class="stock-grid">'
     for d in display_list:
         score = d.get('Score', 0)
