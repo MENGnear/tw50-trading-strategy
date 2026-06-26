@@ -2,14 +2,14 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.14 (導入 2*ATR 動態停損)
+# 策略版本 : v02.15 (新增 System-Level 總體績效統計報表)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
 # 2. 技術指標計算 (MA、MACD、ATR)
 # 3. Breakout Strategy 回測
 # 4. SQLite 資料儲存與管理
-# 5. Telegram 即時訊號通知
+# 5. Telegram 即時訊號與「策略總體績效」通知
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 主要策略：
 # - Score >= 45 建立 Setup
@@ -120,7 +120,7 @@ def init_db(db_name="tw50_strategy.db"):
 # ==============================
 # Prt.03 技術指標計算與回測
 # ==============================
-def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):  
+def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.15"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
     # 均線與量能計算
@@ -135,7 +135,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # 🎯 新增：計算 ATR (Average True Range)
+    # 🎯 計算 ATR (Average True Range)
     df['Prev_Close'] = df['Close'].shift(1)
     df['TR'] = np.maximum(
         df['High'] - df['Low'],
@@ -163,7 +163,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):
     entry_idx = 0
     trade_max_drawdown = 0.0
     setup_active = False
-    stop_loss_price = 0.0  # 初始化停損變數
+    stop_loss_price = 0.0
 
     for i in range(65, len(df)-1):
         yesterday = df.iloc[i-1]
@@ -193,8 +193,6 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):
         else:
             peak_price = max(peak_price, tomorrow['High'])
             trade_max_drawdown = min(trade_max_drawdown, (tomorrow['Low'] - peak_price) / peak_price)
-            
-            # 使用已鎖定的 stop_loss_price，不再使用固定 8% 停損
 
             if tomorrow['Low'] <= stop_loss_price:
                 exit_price = min(tomorrow['Open'], stop_loss_price)
@@ -258,7 +256,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):
     return trades, df
 
 # ==============================
-# Prt.06 歷史資料同步
+# Prt.04 歷史資料同步
 # ==============================
 def sync_daily_data(conn):
     cursor = conn.cursor()
@@ -326,12 +324,70 @@ def sync_daily_data(conn):
         print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 # ==============================
-# Prt.07 回測主控引擎 (封裝成標準函式)
+# Prt.05 新增：總體績效結算模組 (v02.15)
+# ==============================
+def generate_performance_report(conn, version):
+    try:
+        df = pd.read_sql_query(
+            "SELECT profit_pct, exit_date FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
+            conn, params=(version,)
+        )
+        if df.empty:
+            return "================\n📈 <b>策略績效健檢</b>\n目前無足夠歷史交易資料可供統計。"
+            
+        total_trades = len(df)
+        win_trades = df[df['profit_pct'] > 0]
+        loss_trades = df[df['profit_pct'] <= 0]
+        
+        win_rate = (len(win_trades) / total_trades) * 100
+        
+        gross_profit = win_trades['profit_pct'].sum()
+        gross_loss = abs(loss_trades['profit_pct'].sum())
+        profit_factor = (gross_profit / gross_loss) if gross_loss != 0 else float('inf')
+        
+        avg_win = win_trades['profit_pct'].mean() if not win_trades.empty else 0
+        avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
+        expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
+        
+        # 理論資金曲線 (假設每次投入單位本金，採複利計算)
+        df['equity'] = (1 + df['profit_pct']).cumprod()
+        df['peak'] = df['equity'].cummax()
+        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
+        sys_mdd = df['drawdown'].min() * 100
+        
+        # CAGR (年化報酬)
+        df['exit_date'] = pd.to_datetime(df['exit_date'])
+        min_date = df['exit_date'].min()
+        max_date = df['exit_date'].max()
+        days = (max_date - min_date).days
+        
+        final_equity = df['equity'].iloc[-1]
+        if days > 0 and final_equity > 0:
+            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+        else:
+            cagr = (final_equity - 1) * 100 
+        
+        report = (
+            f"================\n"
+            f"📈 <b>策略歷史績效健檢 (System Metrics)</b>\n"
+            f"• 總交易筆數: {total_trades} 筆\n"
+            f"• 勝率 (Win Rate): {win_rate:.1f}%\n"
+            f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
+            f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
+            f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
+            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%"
+        )
+        return report
+    except Exception as e:
+        return f"================\n⚠️ 績效統計發生錯誤: {e}"
+
+# ==============================
+# Prt.06 回測主控引擎 (包含績效模組掛載)
 # ==============================
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.14"
+    strategy_version = "v02.15"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -339,9 +395,6 @@ def run_0050_batch(conn):
     try:
         conn.execute("BEGIN TRANSACTION")
 
-        # ==============================
-        # Prt.08 個股回測流程
-        # ==============================
         for ticker in tickers:
             try:
                 cursor = conn.cursor()
@@ -358,11 +411,10 @@ def run_0050_batch(conn):
                 
                 all_trades, df_processed = calculate_v0212_and_backtest(df_ticker, ticker, strategy_version)
                 
-                # 🎯 訊號監控：判斷最新交易日是否符合 Watchlist 條件 (Score >= 45)
+                # 🎯 訊號監控：判斷最新交易日是否符合 Watchlist 條件
                 if not df_processed.empty:
                     last_row = df_processed.iloc[-1]
                     if last_row['Score'] >= 45:
-                        # 試算 Telegram 顯示用的 ATR 停損資訊
                         entry_target = last_row['High']
                         atr20 = last_row['ATR20']
                         stop_target = entry_target - (2 * atr20)
@@ -370,9 +422,7 @@ def run_0050_batch(conn):
                         
                         alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {entry_target:.2f} 買進, 防守 {stop_target:.2f} [-{risk_pct:.1f}%])")
                 
-                # ==============================
-                # Prt.12 回測結果寫入
-                # ==============================
+                # 回測結果寫入
                 if all_trades:
                     conn.executemany('''
                         INSERT INTO backtest_trades (
@@ -387,7 +437,7 @@ def run_0050_batch(conn):
                 continue
 
         conn.commit()
-        print("✅ v02.14 效能優化：TW50 全數標的已完成大批次寫入！")
+        print("✅ v02.15 效能優化：TW50 全數標的已完成大批次寫入！")
 
     except Exception as main_e:
         conn.rollback()
@@ -396,7 +446,7 @@ def run_0050_batch(conn):
         alerts_trigger.append(f"⚠️ <b>資料庫寫入失敗</b>\n{error_message}")
 
     # ==============================
-    # Prt.13 Telegram 訊息組裝与發送
+    # Telegram 訊息組裝与發送
     # ==============================
     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
     
@@ -419,12 +469,16 @@ def run_0050_batch(conn):
     if not alerts_trigger and not alerts_setup:
         msg_parts.append("================\n盤後無新增訊號。")
         
+    # 🎯 掛載 v02.15 績效健檢報表
+    performance_report = generate_performance_report(conn, strategy_version)
+    msg_parts.append(performance_report)
+
     msg_parts.append("================\n✅ 系統目前正常運作中")
 
     send_telegram_alert("\n".join(msg_parts))
 
 # ==============================
-# Prt.15 主程式入口
+# 主程式入口
 # ==============================
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
