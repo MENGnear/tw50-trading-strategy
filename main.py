@@ -2,11 +2,11 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.13
+# 策略版本 : v02.14 (導入 2*ATR 動態停損)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
-# 2. 技術指標計算 (MA、MACD)
+# 2. 技術指標計算 (MA、MACD、ATR)
 # 3. Breakout Strategy 回測
 # 4. SQLite 資料儲存與管理
 # 5. Telegram 即時訊號通知
@@ -14,7 +14,7 @@
 # 主要策略：
 # - Score >= 45 建立 Setup
 # - Buy Stop 突破進場
-# - 固定停損 8%
+# - 動態停損 (Entry - 2*ATR20)
 # - 跌破 MA20 出場
 # - 回測結束強制平倉
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
@@ -120,19 +120,33 @@ def init_db(db_name="tw50_strategy.db"):
 # ==============================
 # Prt.03 技術指標計算與回測
 # ==============================
-def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):  
+def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.14"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
+    # 均線與量能計算
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
     df['V_MA5'] = df['Volume'].rolling(5).mean()
 
+    # MACD 計算
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
+    # 🎯 新增：計算 ATR (Average True Range)
+    df['Prev_Close'] = df['Close'].shift(1)
+    df['TR'] = np.maximum(
+        df['High'] - df['Low'],
+        np.maximum(
+            abs(df['High'] - df['Prev_Close']),
+            abs(df['Low'] - df['Prev_Close'])
+        )
+    )
+    df['ATR20'] = df['TR'].rolling(window=20).mean()
+    
+    # 策略評分條件
     t1 = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
     m1 = (df['Close'] > df['MA20']).astype(int) * 10                    
     m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
@@ -149,6 +163,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):
     entry_idx = 0
     trade_max_drawdown = 0.0
     setup_active = False
+    stop_loss_price = 0.0  # 初始化停損變數
 
     for i in range(65, len(df)-1):
         yesterday = df.iloc[i-1]
@@ -172,10 +187,14 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.12"):
                     entry_idx = i + 1
                     peak_price = entry_price
                     trade_max_drawdown = 0.0
+                    
+                    # 🎯 進場當下：使用訊號日的 ATR 計算動態停損
+                    stop_loss_price = entry_price - (2 * today['ATR20'])
         else:
             peak_price = max(peak_price, tomorrow['High'])
             trade_max_drawdown = min(trade_max_drawdown, (tomorrow['Low'] - peak_price) / peak_price)
-            stop_loss_price = entry_price * 0.92
+            
+            # 使用已鎖定的 stop_loss_price，不再使用固定 8% 停損
 
             if tomorrow['Low'] <= stop_loss_price:
                 exit_price = min(tomorrow['Open'], stop_loss_price)
@@ -282,7 +301,6 @@ def sync_daily_data(conn):
             print(f"❌ 整理 {ticker} 錯誤: {e}")
 
     if all_records:
-        # 1. 先將最新下載的增量數據寫入（或更新）資料庫
         cursor.executemany('''
             INSERT OR REPLACE INTO daily_price (ticker, Date, Open, High, Low, Close, Volume)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -290,8 +308,6 @@ def sync_daily_data(conn):
         conn.commit()
         print("✅ 最新數據已成功寫入 SQLite 資料庫。")
 
-    # 🚀 【關鍵修復】：不論是初次還是增量，都從資料庫倒出「最完整」的歷史資料覆蓋成 CSV
-    # 這樣 temp_data.csv 就不會被閹割，永遠維持最新的完整5年資料！
     try:
         full_df = pd.read_sql_query("SELECT * FROM daily_price ORDER BY ticker, Date ASC", conn)
         full_df.to_csv("temp_data.csv", index=False)
@@ -299,7 +315,6 @@ def sync_daily_data(conn):
     except Exception as csv_e:
         print(f"❌ 匯出完整 CSV 失敗: {csv_e}")
 
-    # 刪除過期資料
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
     cursor.execute("DELETE FROM alert_log WHERE entry_date < ?", (cutoff_date,))
@@ -316,14 +331,12 @@ def sync_daily_data(conn):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.12"
+    strategy_version = "v02.14"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
 
-    # 🚀 v02.13 新增：開啟大批次交易防護 (Try-Except-Rollback)
     try:
-        # 宣告開始批次交易，讓 SQLite 將接下來的寫入全數暫存在記憶體中
         conn.execute("BEGIN TRANSACTION")
 
         # ==============================
@@ -331,7 +344,6 @@ def run_0050_batch(conn):
         # ==============================
         for ticker in tickers:
             try:
-                # 從資料庫中讀取該個股的歷史價格資料
                 cursor = conn.cursor()
                 cursor.execute(
                     "SELECT Date, Open, High, Low, Close, Volume FROM daily_price WHERE ticker = ? ORDER BY Date ASC", 
@@ -341,21 +353,25 @@ def run_0050_batch(conn):
                 if not rows:
                     continue
                 
-                # 將資料轉換回 DataFrame
                 df_ticker = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                 df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
                 
-                # 執行技術指標計算與策略回測
                 all_trades, df_processed = calculate_v0212_and_backtest(df_ticker, ticker, strategy_version)
                 
                 # 🎯 訊號監控：判斷最新交易日是否符合 Watchlist 條件 (Score >= 45)
                 if not df_processed.empty:
                     last_row = df_processed.iloc[-1]
                     if last_row['Score'] >= 45:
-                        alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {last_row['High']:.2f} 買進)")
+                        # 試算 Telegram 顯示用的 ATR 停損資訊
+                        entry_target = last_row['High']
+                        atr20 = last_row['ATR20']
+                        stop_target = entry_target - (2 * atr20)
+                        risk_pct = (entry_target - stop_target) / entry_target * 100 if entry_target > 0 else 0
+                        
+                        alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {entry_target:.2f} 買進, 防守 {stop_target:.2f} [-{risk_pct:.1f}%])")
                 
                 # ==============================
-                # Prt.12 回測結果寫入 (對齊資料表：backtest_trades)
+                # Prt.12 回測結果寫入
                 # ==============================
                 if all_trades:
                     conn.executemany('''
@@ -370,16 +386,10 @@ def run_0050_batch(conn):
                 print(f"⚠️ {ticker} 處理異常，已跳過: {inner_e}")
                 continue
 
-        # ==============================
-        # 🎯 迴圈結束：執行大批次落盤 (Batch Commit)
-        # ==============================
         conn.commit()
-        print("✅ v02.13 效能優化：TW50 全數標的已完成大批次寫入！")
+        print("✅ v02.14 效能優化：TW50 全數標的已完成大批次寫入！")
 
     except Exception as main_e:
-        # ==============================
-        # 🚨 全局異常防護：資料庫回滾 (Rollback)
-        # ==============================
         conn.rollback()
         error_message = f"❌ 系統嚴重崩潰，資料庫已安全回滾！原因: {main_e}"
         print(error_message)
@@ -388,49 +398,29 @@ def run_0050_batch(conn):
     # ==============================
     # Prt.13 Telegram 訊息組裝与發送
     # ==============================
-    # 抓取台北時間
     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
     
-    # 初始化訊息陣列 (加入標題與時間)
     msg_parts = [
         f"📊 <b>{strategy_version} 台股 50 戰情室 (自動盤後更新)</b>",
         f"🕒 {now_str} 回測"
     ]
 
-    # ==============================
-    # Prt.13.1 Watchlist (對齊手動格式)
-    # ==============================
     if alerts_setup:
-        # 為了跟手動版本一樣由分數高到低排序，我們先依照分數對字串進行排序
-        # (這裡利用字串中包含的 "Score: XX" 數字來降冪排序)
         try:
             alerts_setup_sorted = sorted(alerts_setup, key=lambda x: int(x.split('Score: ')[1].split(',')[0]), reverse=True)
         except Exception:
-            alerts_setup_sorted = alerts_setup # 若解析失敗則維持原排序
+            alerts_setup_sorted = alerts_setup 
 
         msg_parts.append("================\n🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n" + "\n".join(alerts_setup_sorted))
 
-    # ==============================
-    # Prt.13.2 Trigger (若有觸發進出場訊號)
-    # ==============================
     if alerts_trigger:
         msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n".join(alerts_trigger))
 
-    # ==============================
-    # Prt.13.3 無訊號
-    # ==============================
     if not alerts_trigger and not alerts_setup:
         msg_parts.append("================\n盤後無新增訊號。")
         
-    # ==============================
-    # Prt.13.4 系統狀態結尾
-    # ==============================
     msg_parts.append("================\n✅ 系統目前正常運作中")
 
-    # ==============================
-    # Prt.14 發送 Telegram
-    # ==============================
-    # 注意：將原本的 "\n\n".join() 改成 "\n".join() 讓整體排版更緊湊
     send_telegram_alert("\n".join(msg_parts))
 
 # ==============================
@@ -438,11 +428,6 @@ def run_0050_batch(conn):
 # ==============================
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
-    
-    # 1. 必須先同步每日最新的歷史資料，否則資料庫內永遠是舊資料
     sync_daily_data(db_connection)
-    
-    # 2. 執行台股 50 大批次掃描與訊號推播
     run_0050_batch(db_connection)
-    
     db_connection.close()
