@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.15 (新增 System-Level 總體績效統計報表)
+# 策略版本 : v02.16 (修復資金曲線計算，導入真實 Portfolio Equity Curve 模擬)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -120,7 +120,7 @@ def init_db(db_name="tw50_strategy.db"):
 # ==============================
 # Prt.03 技術指標計算與回測
 # ==============================
-def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.15"):  
+def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.16"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
     # 均線與量能計算
@@ -135,7 +135,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.15"):
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # 🎯 計算 ATR (Average True Range)
+    # 計算 ATR (Average True Range)
     df['Prev_Close'] = df['Close'].shift(1)
     df['TR'] = np.maximum(
         df['High'] - df['Low'],
@@ -188,7 +188,7 @@ def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.15"):
                     peak_price = entry_price
                     trade_max_drawdown = 0.0
                     
-                    # 🎯 進場當下：使用訊號日的 ATR 計算動態停損
+                    # 進場當下：使用訊號日的 ATR 計算動態停損
                     stop_loss_price = entry_price - (2 * today['ATR20'])
         else:
             peak_price = max(peak_price, tomorrow['High'])
@@ -324,12 +324,13 @@ def sync_daily_data(conn):
         print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 # ==============================
-# Prt.05 新增：總體績效結算模組 (v02.15)
+# Prt.05 總體績效結算模組 (v02.16 真實 Portfolio Equity 演算法)
 # ==============================
 def generate_performance_report(conn, version):
     try:
+        # 新增抓取 entry_date 以利建立每日時間軸
         df = pd.read_sql_query(
-            "SELECT profit_pct, exit_date FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
+            "SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
             conn, params=(version,)
         )
         if df.empty:
@@ -339,7 +340,7 @@ def generate_performance_report(conn, version):
         win_trades = df[df['profit_pct'] > 0]
         loss_trades = df[df['profit_pct'] <= 0]
         
-        win_rate = (len(win_trades) / total_trades) * 100
+        win_rate = (len(win_trades) / total_trades) * 100 if total_trades > 0 else 0
         
         gross_profit = win_trades['profit_pct'].sum()
         gross_loss = abs(loss_trades['profit_pct'].sum())
@@ -349,23 +350,48 @@ def generate_performance_report(conn, version):
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # 理論資金曲線 (假設每次投入單位本金，採複利計算)
-        df['equity'] = (1 + df['profit_pct']).cumprod()
-        df['peak'] = df['equity'].cummax()
-        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
-        sys_mdd = df['drawdown'].min() * 100
+        # --- 🎯 資金組合曲線 (Portfolio Equity Curve) 模擬 ---
+        # 假設資金管理設定：每筆交易固定投入總資產的 10%
+        weight_per_trade = 0.10
         
-        # CAGR (年化報酬)
+        df['entry_date'] = pd.to_datetime(df['entry_date'])
         df['exit_date'] = pd.to_datetime(df['exit_date'])
-        min_date = df['exit_date'].min()
-        max_date = df['exit_date'].max()
-        days = (max_date - min_date).days
         
-        final_equity = df['equity'].iloc[-1]
-        if days > 0 and final_equity > 0:
-            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+        daily_records = []
+        
+        # 將每筆交易利潤依持倉天數「線性平攤」，模擬每日標記回溯 (Daily Mark-to-Market)
+        for _, row in df.iterrows():
+            dr = pd.date_range(start=row['entry_date'], end=row['exit_date'], freq='D')
+            hold_days = len(dr) - 1
+            if hold_days > 0:
+                daily_pnl = (row['profit_pct'] * weight_per_trade) / hold_days
+                for d in dr[1:]:
+                    daily_records.append({'date': d, 'pnl': daily_pnl})
+            else:
+                daily_records.append({'date': row['exit_date'], 'pnl': row['profit_pct'] * weight_per_trade})
+                
+        if daily_records:
+            daily_df = pd.DataFrame(daily_records)
+            # 依照日期將所有平行持倉的 PnL 加總
+            port_daily = daily_df.groupby('date')['pnl'].sum().reset_index()
+            port_daily = port_daily.sort_values('date')
+            
+            # 建立每日真實總體淨值
+            port_daily['equity'] = 1.0 + port_daily['pnl'].cumsum()
+            port_daily['peak'] = port_daily['equity'].cummax()
+            port_daily['drawdown'] = (port_daily['equity'] - port_daily['peak']) / port_daily['peak']
+            
+            sys_mdd = port_daily['drawdown'].min() * 100
+            
+            days = (port_daily['date'].max() - port_daily['date'].min()).days
+            final_equity = port_daily['equity'].iloc[-1]
+            if days > 0 and final_equity > 0:
+                cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+            else:
+                cagr = (final_equity - 1) * 100 
         else:
-            cagr = (final_equity - 1) * 100 
+            sys_mdd = 0
+            cagr = 0
         
         report = (
             f"================\n"
@@ -375,7 +401,8 @@ def generate_performance_report(conn, version):
             f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
-            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%"
+            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
+            f"<i>*註: CAGR與MDD採固定10%資金平鋪持倉進行每日淨值模擬</i>"
         )
         return report
     except Exception as e:
@@ -387,7 +414,7 @@ def generate_performance_report(conn, version):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.15"
+    strategy_version = "v02.16"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -411,7 +438,6 @@ def run_0050_batch(conn):
                 
                 all_trades, df_processed = calculate_v0212_and_backtest(df_ticker, ticker, strategy_version)
                 
-                # 🎯 訊號監控：判斷最新交易日是否符合 Watchlist 條件
                 if not df_processed.empty:
                     last_row = df_processed.iloc[-1]
                     if last_row['Score'] >= 45:
@@ -422,7 +448,6 @@ def run_0050_batch(conn):
                         
                         alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {entry_target:.2f} 買進, 防守 {stop_target:.2f} [-{risk_pct:.1f}%])")
                 
-                # 回測結果寫入
                 if all_trades:
                     conn.executemany('''
                         INSERT INTO backtest_trades (
@@ -437,7 +462,7 @@ def run_0050_batch(conn):
                 continue
 
         conn.commit()
-        print("✅ v02.15 效能優化：TW50 全數標的已完成大批次寫入！")
+        print(f"✅ {strategy_version} 效能優化：TW50 全數標的已完成大批次寫入！")
 
     except Exception as main_e:
         conn.rollback()
@@ -445,9 +470,6 @@ def run_0050_batch(conn):
         print(error_message)
         alerts_trigger.append(f"⚠️ <b>資料庫寫入失敗</b>\n{error_message}")
 
-    # ==============================
-    # Telegram 訊息組裝与發送
-    # ==============================
     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
     
     msg_parts = [
@@ -469,7 +491,6 @@ def run_0050_batch(conn):
     if not alerts_trigger and not alerts_setup:
         msg_parts.append("================\n盤後無新增訊號。")
         
-    # 🎯 掛載 v02.15 績效健檢報表
     performance_report = generate_performance_report(conn, strategy_version)
     msg_parts.append(performance_report)
 
@@ -477,9 +498,6 @@ def run_0050_batch(conn):
 
     send_telegram_alert("\n".join(msg_parts))
 
-# ==============================
-# 主程式入口
-# ==============================
 if __name__ == "__main__":
     db_connection = init_db("tw50_strategy.db")
     sync_daily_data(db_connection)
