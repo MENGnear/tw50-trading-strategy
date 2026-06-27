@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.16 (修復資金曲線計算，導入真實 Portfolio Equity Curve 模擬)
+# 策略版本 : v02.17 (修復回測紀錄重複累積問題、核心函式重構命名)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -120,7 +120,7 @@ def init_db(db_name="tw50_strategy.db"):
 # ==============================
 # Prt.03 技術指標計算與回測
 # ==============================
-def calculate_v0212_and_backtest(df, ticker, strategy_version="v02.16"):  
+def calculate_strategy(df, ticker, strategy_version="v02.17"):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
 
     # 均線與量能計算
@@ -324,11 +324,10 @@ def sync_daily_data(conn):
         print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 # ==============================
-# Prt.05 總體績效結算模組 (v02.16 真實 Portfolio Equity 演算法)
+# Prt.05 總體績效結算模組 (Portfolio Equity 演算法)
 # ==============================
 def generate_performance_report(conn, version):
     try:
-        # 新增抓取 entry_date 以利建立每日時間軸
         df = pd.read_sql_query(
             "SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
             conn, params=(version,)
@@ -351,7 +350,6 @@ def generate_performance_report(conn, version):
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
         # --- 🎯 資金組合曲線 (Portfolio Equity Curve) 模擬 ---
-        # 假設資金管理設定：每筆交易固定投入總資產的 10%
         weight_per_trade = 0.10
         
         df['entry_date'] = pd.to_datetime(df['entry_date'])
@@ -359,7 +357,6 @@ def generate_performance_report(conn, version):
         
         daily_records = []
         
-        # 將每筆交易利潤依持倉天數「線性平攤」，模擬每日標記回溯 (Daily Mark-to-Market)
         for _, row in df.iterrows():
             dr = pd.date_range(start=row['entry_date'], end=row['exit_date'], freq='D')
             hold_days = len(dr) - 1
@@ -372,11 +369,9 @@ def generate_performance_report(conn, version):
                 
         if daily_records:
             daily_df = pd.DataFrame(daily_records)
-            # 依照日期將所有平行持倉的 PnL 加總
             port_daily = daily_df.groupby('date')['pnl'].sum().reset_index()
             port_daily = port_daily.sort_values('date')
             
-            # 建立每日真實總體淨值
             port_daily['equity'] = 1.0 + port_daily['pnl'].cumsum()
             port_daily['peak'] = port_daily['equity'].cummax()
             port_daily['drawdown'] = (port_daily['equity'] - port_daily['peak']) / port_daily['peak']
@@ -414,13 +409,16 @@ def generate_performance_report(conn, version):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.16"
+    strategy_version = "v02.17"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
 
     try:
         conn.execute("BEGIN TRANSACTION")
+        
+        # 🎯 新增：回測前先清空當前版本的舊紀錄，避免重複累積失真
+        conn.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
 
         for ticker in tickers:
             try:
@@ -436,7 +434,7 @@ def run_0050_batch(conn):
                 df_ticker = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                 df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
                 
-                all_trades, df_processed = calculate_v0212_and_backtest(df_ticker, ticker, strategy_version)
+                all_trades, df_processed = calculate_strategy(df_ticker, ticker, strategy_version)
                 
                 if not df_processed.empty:
                     last_row = df_processed.iloc[-1]
