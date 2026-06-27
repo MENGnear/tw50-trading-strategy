@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐•
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.11 (優化側邊欄小功能區塊與白色框線)
+# 策略版本 : v03.12 (按鈕更名「手動回測」並整合 SQLite 總體績效報表)
 # ==========================================================
 
 import streamlit as st
@@ -14,6 +14,7 @@ import json
 import urllib.request
 import datetime
 import pytz
+import sqlite3
 from streamlit_autorefresh import st_autorefresh
 
 # --- 頁面基本設定 ---
@@ -24,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.11"
+APP_VERSION = "v03.12"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -228,7 +229,65 @@ def calculate_v0212_score(df_stock):
     return res
 
 # ==============================
-# Prt.05 主程式與渲染大廳
+# Prt.05 總體績效結算模組 (從 main.py 移植)
+# ==============================
+def generate_performance_report(conn, version):
+    try:
+        df = pd.read_sql_query(
+            "SELECT profit_pct, exit_date FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
+            conn, params=(version,)
+        )
+        if df.empty:
+            return "================\n📈 <b>策略績效健檢</b>\n目前無足夠歷史交易資料可供統計。"
+            
+        total_trades = len(df)
+        win_trades = df[df['profit_pct'] > 0]
+        loss_trades = df[df['profit_pct'] <= 0]
+        
+        win_rate = (len(win_trades) / total_trades) * 100
+        
+        gross_profit = win_trades['profit_pct'].sum()
+        gross_loss = abs(loss_trades['profit_pct'].sum())
+        profit_factor = (gross_profit / gross_loss) if gross_loss != 0 else float('inf')
+        
+        avg_win = win_trades['profit_pct'].mean() if not win_trades.empty else 0
+        avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
+        expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
+        
+        # 理論資金曲線 (假設每次投入單位本金，採複利計算)
+        df['equity'] = (1 + df['profit_pct']).cumprod()
+        df['peak'] = df['equity'].cummax()
+        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
+        sys_mdd = df['drawdown'].min() * 100
+        
+        # CAGR (年化報酬)
+        df['exit_date'] = pd.to_datetime(df['exit_date'])
+        min_date = df['exit_date'].min()
+        max_date = df['exit_date'].max()
+        days = (max_date - min_date).days
+        
+        final_equity = df['equity'].iloc[-1]
+        if days > 0 and final_equity > 0:
+            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+        else:
+            cagr = (final_equity - 1) * 100 
+        
+        report = (
+            f"================\n"
+            f"📈 <b>策略歷史績效健檢 (System Metrics)</b>\n"
+            f"• 總交易筆數: {total_trades} 筆\n"
+            f"• 勝率 (Win Rate): {win_rate:.1f}%\n"
+            f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
+            f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
+            f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
+            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%"
+        )
+        return report
+    except Exception as e:
+        return f"================\n⚠️ 績效統計發生錯誤: {e}"
+
+# ==============================
+# Prt.06 主程式與渲染大廳
 # ==============================
 def main():
     st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
@@ -282,7 +341,8 @@ def main():
                 st.cache_data.clear()
                 safe_rerun()
                 
-            if st.button("▶️ 執行股票回測", use_container_width=True):
+            # 🎯 更改按鈕名稱為「手動回測」
+            if st.button("▶️ 手動回測", use_container_width=True):
                 with st.spinner("🚀 正在執行判定與通報..."):
                     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
                     msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
@@ -295,6 +355,18 @@ def main():
                             msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進)\n"
                     else:
                         msg += "盤後無新增訊號。\n"
+                    
+                    # 🎯 讀取 SQLite 中的 v02.15 績效報表
+                    try:
+                        if os.path.exists("tw50_strategy.db"):
+                            conn = sqlite3.connect("tw50_strategy.db")
+                            report = generate_performance_report(conn, "v02.15")
+                            msg += f"\n{report}\n"
+                            conn.close()
+                        else:
+                            msg += "\n================\n⚠️ 找不到策略資料庫 (tw50_strategy.db)，請確認後台回測已執行。\n"
+                    except Exception as db_e:
+                        msg += f"\n================\n⚠️ 讀取策略資料庫失敗: {db_e}\n"
                         
                     msg += "================\n✅ 系統目前正常運作中"
                     is_success, error_reason = send_telegram_alert(msg)
