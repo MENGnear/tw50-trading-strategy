@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.17 (修復回測紀錄重複累積問題、核心函式重構命名)
+# 策略版本 : v02.18 (核心策略回測模組重構：指標/訊號/交易/統計 解耦)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -118,24 +118,23 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==============================
-# Prt.03 技術指標計算與回測
+# Prt.03 核心策略模組拆解 (v02.18)
 # ==============================
-def calculate_strategy(df, ticker, strategy_version="v02.17"):  
-    df = df.sort_values('Date').dropna().reset_index(drop=True)
 
-    # 均線與量能計算
+def calculate_indicator(df):
+    """階段一：計算所有底層技術指標"""
     df['MA20'] = df['Close'].rolling(20).mean()
     df['MA60'] = df['Close'].rolling(60).mean()
     df['V_MA5'] = df['Volume'].rolling(5).mean()
 
-    # MACD 計算
+    # MACD
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['DIF'] = ema12 - ema26
     df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
-    # 計算 ATR (Average True Range)
+    # ATR20
     df['Prev_Close'] = df['Close'].shift(1)
     df['TR'] = np.maximum(
         df['High'] - df['Low'],
@@ -145,16 +144,28 @@ def calculate_strategy(df, ticker, strategy_version="v02.17"):
         )
     )
     df['ATR20'] = df['TR'].rolling(window=20).mean()
-    
-    # 策略評分條件
+    return df
+
+def generate_signal(df):
+    """階段二：依據指標計算策略訊號與評分"""
     t1 = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
     m1 = (df['Close'] > df['MA20']).astype(int) * 10                    
     m2 = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
     m3 = (df['MA20'] > df['MA60']).astype(int) * 10                      
     v1 = (df['Volume'] > df['V_MA5'] * 1.3).astype(int) * 10            
-    
     df['Score'] = t1 + m1 + m2 + m3 + v1
-    
+    return df
+
+def trade_statistics(entry_price, exit_price, entry_idx, exit_idx, peak_price, trade_max_drawdown):
+    """階段三：計算單筆交易的績效統計數據"""
+    profit_pct = (exit_price - entry_price) / entry_price
+    holding_bars = exit_idx - entry_idx
+    max_p = (peak_price - entry_price) / entry_price
+    trade_max_drawdown_pct = trade_max_drawdown * 100
+    return profit_pct, holding_bars, max_p, trade_max_drawdown_pct
+
+def simulate_trade(df, ticker, strategy_version):
+    """階段四：執行交易狀態機，進行歷史回測"""
     trades = []
     in_position = False
     entry_price = signal_day_high = entry_score = 0
@@ -171,6 +182,7 @@ def calculate_strategy(df, ticker, strategy_version="v02.17"):
         tomorrow = df.iloc[i+1]
 
         if not in_position:
+            # Setup 條件：今日 >= 45 且昨日 < 45
             if not setup_active and today['Score'] >= 45 and yesterday['Score'] < 45:
                 setup_active = True
                 signal_day_high = today['High']
@@ -188,71 +200,86 @@ def calculate_strategy(df, ticker, strategy_version="v02.17"):
                     peak_price = entry_price
                     trade_max_drawdown = 0.0
                     
-                    # 進場當下：使用訊號日的 ATR 計算動態停損
+                    # 鎖定進場當日的動態停損點
                     stop_loss_price = entry_price - (2 * today['ATR20'])
         else:
+            # 倉位監控與更新最大回撤
             peak_price = max(peak_price, tomorrow['High'])
             trade_max_drawdown = min(trade_max_drawdown, (tomorrow['Low'] - peak_price) / peak_price)
 
+            # 離場條件 1: 觸發動態停損
             if tomorrow['Low'] <= stop_loss_price:
                 exit_price = min(tomorrow['Open'], stop_loss_price)
                 exit_date = tomorrow['Date']
-                profit_pct = (exit_price - entry_price) / entry_price
-                holding_bars = (i + 1) - entry_idx
-                max_p = (peak_price - entry_price) / entry_price
-                trade_max_drawdown_pct = (trade_max_drawdown * 100)
+                exit_idx = i + 1
+                
+                p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, peak_price, trade_max_drawdown)
                 
                 trades.append((
                     strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-                    entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+                    entry_price, exit_price, p, h, m, d, entry_score
                 ))
                 in_position = False
 
+            # 離場條件 2: 跌破 MA20
             elif tomorrow['Close'] < tomorrow['MA20']:
                 if i + 2 < len(df):
                     next_day = df.iloc[i + 2]
                     exit_price = next_day['Open']
                     exit_date = next_day['Date']
-                    profit_pct = (exit_price - entry_price) / entry_price
-                    holding_bars = (i + 2) - entry_idx
+                    exit_idx = i + 2
+                    
                     temp_peak = max(peak_price, next_day['High'])
                     temp_drawdown = (next_day['Low'] - temp_peak) / temp_peak
                     final_mdd = min(trade_max_drawdown, temp_drawdown)
-                    max_p = (temp_peak - entry_price) / entry_price
+                    
+                    p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
                 else:
                     last_day = df.iloc[-1]
                     exit_price = last_day['Close']
                     exit_date = last_day['Date']
-                    profit_pct = (exit_price - entry_price) / entry_price
-                    holding_bars = (len(df) - 1) - entry_idx
+                    exit_idx = len(df) - 1
+                    
                     temp_peak = max(peak_price, last_day['High'])
                     temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
                     final_mdd = min(trade_max_drawdown, temp_drawdown)
-                    max_p = (temp_peak - entry_price) / entry_price
+                    
+                    p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
             
-                trade_max_drawdown_pct = final_mdd * 100
                 trades.append((
                     strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-                    entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+                    entry_price, exit_price, p, h, m, d, entry_score
                 ))
                 in_position = False
                     
+    # 回測結束，強制平倉未結算的倉位
     if in_position:
         last_day = df.iloc[-1]
         exit_price = last_day['Close']
         exit_date = last_day['Date']
-        profit_pct = (exit_price - entry_price) / entry_price
-        holding_bars = (len(df) - 1) - entry_idx
+        exit_idx = len(df) - 1
+        
         temp_peak = max(peak_price, last_day['High'])
         temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
         final_mdd = min(trade_max_drawdown, temp_drawdown)
-        max_p = (temp_peak - entry_price) / entry_price
-        trade_max_drawdown_pct = final_mdd * 100
+        
+        p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
+        
         trades.append((
             strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-            entry_price, exit_price, profit_pct, holding_bars, max_p, trade_max_drawdown_pct, entry_score
+            entry_price, exit_price, p, h, m, d, entry_score
         ))
         
+    return trades
+
+def calculate_strategy(df, ticker, strategy_version="v02.18"):  
+    """總指揮官：依序呼叫指標、訊號、交易模擬模組"""
+    df = df.sort_values('Date').dropna().reset_index(drop=True)
+    
+    df = calculate_indicator(df)
+    df = generate_signal(df)
+    trades = simulate_trade(df, ticker, strategy_version)
+    
     return trades, df
 
 # ==============================
@@ -404,12 +431,12 @@ def generate_performance_report(conn, version):
         return f"================\n⚠️ 績效統計發生錯誤: {e}"
 
 # ==============================
-# Prt.06 回測主控引擎 (包含績效模組掛載)
+# Prt.06 回測主控引擎
 # ==============================
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.17"
+    strategy_version = "v02.18"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -417,7 +444,7 @@ def run_0050_batch(conn):
     try:
         conn.execute("BEGIN TRANSACTION")
         
-        # 🎯 新增：回測前先清空當前版本的舊紀錄，避免重複累積失真
+        # 回測前先清空當前版本的舊紀錄，避免重複累積失真
         conn.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
 
         for ticker in tickers:
