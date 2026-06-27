@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.20 (重構資金曲線為誠實的 Sequential Trade Equity)
+# 策略版本 : v02.21 (移除幽靈 alert_log 表、新增 Setup 絕對壽命上限)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -12,7 +12,7 @@
 # 5. Telegram 即時訊號與「策略已實現績效」通知
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 主要策略：
-# - Score >= 45 建立 Setup (3天有效，跌破低點失效)
+# - Score >= 45 建立 Setup (最高存活 5 天，3天內需突破，跌破低點失效)
 # - Buy Stop 突破滾動高點進場
 # - 動態停損 (Entry - 2*ATR20)
 # - 跌破 MA20 出場
@@ -99,15 +99,8 @@ def init_db(db_name="tw50_strategy.db"):
             entry_score REAL
         )
     ''')
-
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS alert_log (
-            strategy_version TEXT,
-            ticker TEXT,
-            entry_date TEXT,
-            PRIMARY KEY (strategy_version, ticker, entry_date)
-        )
-    ''')
+    
+    # Prt.02.1 已移除 alert_log 表格建立語句 (v02.21)
     
     try:
         cursor.execute("ALTER TABLE backtest_trades ADD COLUMN trade_max_drawdown_pct REAL")
@@ -118,7 +111,7 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==============================
-# Prt.03 核心策略模組 (v02.20)
+# Prt.03 核心策略模組 (v02.21)
 # ==============================
 
 def calculate_indicator(df):
@@ -173,7 +166,7 @@ def simulate_trade(df, ticker, strategy_version):
     setup_active = False
     setup_high = 0.0
     setup_low = 0.0
-    setup_countdown = 0
+    setup_age = 0      # 記錄 Setup 已存活天數
     entry_score = 0
     
     entry_price = 0.0
@@ -193,7 +186,7 @@ def simulate_trade(df, ticker, strategy_version):
             continue
             
         if in_position:
-            # 1. 執行跨日預定出場 (昨日觸發跌破 MA20，今日開盤出場)
+            # 1. 執行跨日預定出場
             if pending_exit:
                 exit_price = curr_bar['Open']
                 exit_date = curr_bar['Date']
@@ -201,7 +194,7 @@ def simulate_trade(df, ticker, strategy_version):
                 trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
                 in_position = False
                 pending_exit = False
-                continue # 出場當天不考慮重新進場
+                continue
                 
             # 2. 更新持倉指標
             peak_price = max(peak_price, curr_bar['High'])
@@ -233,7 +226,6 @@ def simulate_trade(df, ticker, strategy_version):
                 trade_max_drawdown = min(0.0, (curr_bar['Low'] - peak_price) / peak_price)
                 stop_loss_price = entry_price - (2 * prev_bar['ATR20'])
                 
-                # 進場當日若遭遇極端洗盤直接觸發停損
                 if curr_bar['Low'] <= stop_loss_price:
                     exit_price = stop_loss_price
                     exit_date = curr_bar['Date']
@@ -242,31 +234,27 @@ def simulate_trade(df, ticker, strategy_version):
                     in_position = False
                     continue
                     
-                # 進場當日若收盤跌破 MA20，排定明日開盤出場
                 if curr_bar['Close'] < curr_bar['MA20']:
                     pending_exit = True
             else:
                 # 處理 Setup 狀態流轉
                 if setup_active:
+                    setup_age += 1 # Setup 天數累加
                     if curr_bar['Low'] < setup_low:
                         setup_active = False # 型態破壞失效
+                    elif setup_age > 5:
+                        setup_active = False # 絕對壽命上限 5 天失效
                     elif curr_bar['Score'] >= 45:
                         setup_high = max(setup_high, curr_bar['High']) # 滾動高點更新
-                        setup_countdown = 3 # 重置倒數
-                    else:
-                        setup_countdown -= 1
-                        if setup_countdown <= 0:
-                            setup_active = False # 時間到期失效
                             
                 # 產生新 Setup
                 if not setup_active and curr_bar['Score'] >= 45 and prev_bar['Score'] < 45:
                     setup_active = True
                     setup_high = curr_bar['High']
                     setup_low = curr_bar['Low']
-                    setup_countdown = 3
+                    setup_age = 0 # 初始化天數
                     entry_score = curr_bar['Score']
                     
-    # 回測資料底端，強制平倉
     if in_position:
         last_bar = df.iloc[-1]
         exit_price = last_bar['Close']
@@ -274,7 +262,6 @@ def simulate_trade(df, ticker, strategy_version):
         p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, len(df)-1, peak_price, trade_max_drawdown)
         trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
         
-    # 結算最後一天的最新潛力標的狀態，供 Telegram 報表使用
     active_setup_info = None
     if not in_position and setup_active:
         last_bar = df.iloc[-1]
@@ -291,14 +278,12 @@ def simulate_trade(df, ticker, strategy_version):
         
     return trades, df, active_setup_info
 
-def calculate_strategy(df, ticker, strategy_version="v02.20"):  
+def calculate_strategy(df, ticker, strategy_version="v02.21"):  
     """總指揮官：依序呼叫指標、訊號、交易模擬模組"""
     df = df.sort_values('Date').dropna().reset_index(drop=True)
-    
     df = calculate_indicator(df)
     df = generate_signal(df)
     trades, df, active_setup_info = simulate_trade(df, ticker, strategy_version)
-    
     return trades, df, active_setup_info
 
 # ==============================
@@ -361,7 +346,7 @@ def sync_daily_data(conn):
 
     cutoff_date = (today - datetime.timedelta(days=1825)).strftime('%Y-%m-%d')
     cursor.execute("DELETE FROM daily_price WHERE Date < ?", (cutoff_date,))
-    cursor.execute("DELETE FROM alert_log WHERE entry_date < ?", (cutoff_date,))
+    # Prt.04.1 已移除過期的 alert_log 清理作業 (v02.21)
     conn.commit()
     
     if today.day == 1:
@@ -399,9 +384,7 @@ def generate_performance_report(conn, version):
         weight_per_trade = 0.10
         
         df['exit_date'] = pd.to_datetime(df['exit_date'])
-        # 依序計算每筆交易對總資金的實際貢獻 (已實現損益)
         df['realized_pnl'] = df['profit_pct'] * weight_per_trade
-        # 將已實現損益依序累加，繪製出誠實的交易淨值曲線
         df['equity'] = 1.0 + df['realized_pnl'].cumsum()
         
         df['peak'] = df['equity'].cummax()
@@ -426,7 +409,7 @@ def generate_performance_report(conn, version):
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
             f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
-            f"<i>*註: 採用 Sequential Trade Equity 算法，假設每筆訊號固定投入 10% 資金，依出場日結算已實現損益，非逐日洗價之真實投資組合淨值。</i>"
+            f"<i>*註: 採用 Sequential Trade Equity 算法，假設每筆訊號固定投入 10% 資金，依出場日結算已實現損益。</i>"
         )
         return report
     except Exception as e:
@@ -438,7 +421,7 @@ def generate_performance_report(conn, version):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.20"
+    strategy_version = "v02.21"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -446,7 +429,7 @@ def run_0050_batch(conn):
     try:
         conn.execute("BEGIN TRANSACTION")
         
-        # 回測前先清空當前版本的舊紀錄，避免重複累積失真
+        # 回測前先清空舊紀錄
         conn.execute("DELETE FROM backtest_trades WHERE version = ?", (strategy_version,))
 
         for ticker in tickers:
@@ -465,7 +448,6 @@ def run_0050_batch(conn):
                 
                 all_trades, df_processed, active_setup_info = calculate_strategy(df_ticker, ticker, strategy_version)
                 
-                # 直譯狀態機跑出的最終 Setup 狀態
                 if active_setup_info:
                     alerts_setup.append(
                         f"• {active_setup_info['ticker']} (Score: {active_setup_info['score']}, 明日突破 {active_setup_info['entry_target']:.2f} 買進, 防守 {active_setup_info['stop_target']:.2f} [-{active_setup_info['risk_pct']:.1f}%])"
@@ -501,7 +483,6 @@ def run_0050_batch(conn):
     ]
 
     if alerts_setup:
-        # 使用字串中的分數進行降冪排序
         try:
             alerts_setup_sorted = sorted(alerts_setup, key=lambda x: int(x.split('Score: ')[1].split(',')[0]), reverse=True)
         except Exception:
