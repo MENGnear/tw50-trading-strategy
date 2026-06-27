@@ -2,14 +2,14 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.19 (狀態機重構、滾動高點、型態破壞容錯、ATR防護)
+# 策略版本 : v02.20 (重構資金曲線為誠實的 Sequential Trade Equity)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
 # 2. 技術指標計算 (MA、MACD、ATR)
 # 3. Breakout Strategy 回測
 # 4. SQLite 資料儲存與管理
-# 5. Telegram 即時訊號與「策略總體績效」通知
+# 5. Telegram 即時訊號與「策略已實現績效」通知
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 主要策略：
 # - Score >= 45 建立 Setup (3天有效，跌破低點失效)
@@ -118,7 +118,7 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==============================
-# Prt.03 核心策略模組 (v02.19)
+# Prt.03 核心策略模組 (v02.20)
 # ==============================
 
 def calculate_indicator(df):
@@ -291,7 +291,7 @@ def simulate_trade(df, ticker, strategy_version):
         
     return trades, df, active_setup_info
 
-def calculate_strategy(df, ticker, strategy_version="v02.19"):  
+def calculate_strategy(df, ticker, strategy_version="v02.20"):  
     """總指揮官：依序呼叫指標、訊號、交易模擬模組"""
     df = df.sort_values('Date').dropna().reset_index(drop=True)
     
@@ -370,7 +370,7 @@ def sync_daily_data(conn):
         print("🧹 每月 1 號例行保養：已執行 VACUUM 釋放硬碟空間。")
 
 # ==============================
-# Prt.05 總體績效結算模組 (Portfolio Equity 演算法)
+# Prt.05 總體績效結算模組 (Sequential Trade Equity 演算法)
 # ==============================
 def generate_performance_report(conn, version):
     try:
@@ -395,55 +395,38 @@ def generate_performance_report(conn, version):
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # --- 🎯 資金組合曲線 (Portfolio Equity Curve) 模擬 ---
+        # --- 🎯 已實現交易淨值 (Sequential Trade Equity) 算法 ---
         weight_per_trade = 0.10
         
-        df['entry_date'] = pd.to_datetime(df['entry_date'])
         df['exit_date'] = pd.to_datetime(df['exit_date'])
+        # 依序計算每筆交易對總資金的實際貢獻 (已實現損益)
+        df['realized_pnl'] = df['profit_pct'] * weight_per_trade
+        # 將已實現損益依序累加，繪製出誠實的交易淨值曲線
+        df['equity'] = 1.0 + df['realized_pnl'].cumsum()
         
-        daily_records = []
+        df['peak'] = df['equity'].cummax()
+        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
         
-        for _, row in df.iterrows():
-            dr = pd.date_range(start=row['entry_date'], end=row['exit_date'], freq='D')
-            hold_days = len(dr) - 1
-            if hold_days > 0:
-                daily_pnl = (row['profit_pct'] * weight_per_trade) / hold_days
-                for d in dr[1:]:
-                    daily_records.append({'date': d, 'pnl': daily_pnl})
-            else:
-                daily_records.append({'date': row['exit_date'], 'pnl': row['profit_pct'] * weight_per_trade})
-                
-        if daily_records:
-            daily_df = pd.DataFrame(daily_records)
-            port_daily = daily_df.groupby('date')['pnl'].sum().reset_index()
-            port_daily = port_daily.sort_values('date')
-            
-            port_daily['equity'] = 1.0 + port_daily['pnl'].cumsum()
-            port_daily['peak'] = port_daily['equity'].cummax()
-            port_daily['drawdown'] = (port_daily['equity'] - port_daily['peak']) / port_daily['peak']
-            
-            sys_mdd = port_daily['drawdown'].min() * 100
-            
-            days = (port_daily['date'].max() - port_daily['date'].min()).days
-            final_equity = port_daily['equity'].iloc[-1]
-            if days > 0 and final_equity > 0:
-                cagr = ((final_equity ** (365.25 / days)) - 1) * 100
-            else:
-                cagr = (final_equity - 1) * 100 
+        sys_mdd = df['drawdown'].min() * 100 if not df.empty else 0
+        
+        days = (df['exit_date'].max() - df['exit_date'].min()).days if not df.empty else 0
+        final_equity = df['equity'].iloc[-1] if not df.empty else 1.0
+        
+        if days > 0 and final_equity > 0:
+            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
         else:
-            sys_mdd = 0
-            cagr = 0
+            cagr = (final_equity - 1) * 100 
         
         report = (
             f"================\n"
-            f"📈 <b>策略歷史績效健檢 (System Metrics)</b>\n"
+            f"📈 <b>策略已實現績效 (Trade-Based Metrics)</b>\n"
             f"• 總交易筆數: {total_trades} 筆\n"
             f"• 勝率 (Win Rate): {win_rate:.1f}%\n"
             f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
             f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
-            f"<i>*註: CAGR與MDD採固定10%資金平鋪持倉進行每日淨值模擬</i>"
+            f"<i>*註: 採用 Sequential Trade Equity 算法，假設每筆訊號固定投入 10% 資金，依出場日結算已實現損益，非逐日洗價之真實投資組合淨值。</i>"
         )
         return report
     except Exception as e:
@@ -455,7 +438,7 @@ def generate_performance_report(conn, version):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.19"
+    strategy_version = "v02.20"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -482,7 +465,7 @@ def run_0050_batch(conn):
                 
                 all_trades, df_processed, active_setup_info = calculate_strategy(df_ticker, ticker, strategy_version)
                 
-                # 🎯 直譯狀態機跑出的最終 Setup 狀態
+                # 直譯狀態機跑出的最終 Setup 狀態
                 if active_setup_info:
                     alerts_setup.append(
                         f"• {active_setup_info['ticker']} (Score: {active_setup_info['score']}, 明日突破 {active_setup_info['entry_target']:.2f} 買進, 防守 {active_setup_info['stop_target']:.2f} [-{active_setup_info['risk_pct']:.1f}%])"
