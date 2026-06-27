@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.18 (核心策略回測模組重構：指標/訊號/交易/統計 解耦)
+# 策略版本 : v02.19 (狀態機重構、滾動高點、型態破壞容錯、ATR防護)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
@@ -12,8 +12,8 @@
 # 5. Telegram 即時訊號與「策略總體績效」通知
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 主要策略：
-# - Score >= 45 建立 Setup
-# - Buy Stop 突破進場
+# - Score >= 45 建立 Setup (3天有效，跌破低點失效)
+# - Buy Stop 突破滾動高點進場
 # - 動態停損 (Entry - 2*ATR20)
 # - 跌破 MA20 出場
 # - 回測結束強制平倉
@@ -118,7 +118,7 @@ def init_db(db_name="tw50_strategy.db"):
     return conn
 
 # ==============================
-# Prt.03 核心策略模組拆解 (v02.18)
+# Prt.03 核心策略模組 (v02.19)
 # ==============================
 
 def calculate_indicator(df):
@@ -158,129 +158,148 @@ def generate_signal(df):
 
 def trade_statistics(entry_price, exit_price, entry_idx, exit_idx, peak_price, trade_max_drawdown):
     """階段三：計算單筆交易的績效統計數據"""
-    profit_pct = (exit_price - entry_price) / entry_price
+    profit_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0
     holding_bars = exit_idx - entry_idx
-    max_p = (peak_price - entry_price) / entry_price
+    max_p = (peak_price - entry_price) / entry_price if entry_price > 0 else 0
     trade_max_drawdown_pct = trade_max_drawdown * 100
     return profit_pct, holding_bars, max_p, trade_max_drawdown_pct
 
 def simulate_trade(df, ticker, strategy_version):
-    """階段四：執行交易狀態機，進行歷史回測"""
+    """階段四：無未來函數之事件驅動狀態機"""
     trades = []
+    
+    # 狀態機變數初始化
     in_position = False
-    entry_price = signal_day_high = entry_score = 0
-    entry_date = None
-    peak_price = 0
-    entry_idx = 0
-    trade_max_drawdown = 0.0
     setup_active = False
+    setup_high = 0.0
+    setup_low = 0.0
+    setup_countdown = 0
+    entry_score = 0
+    
+    entry_price = 0.0
+    entry_date = None
+    entry_idx = 0
+    peak_price = 0.0
+    trade_max_drawdown = 0.0
     stop_loss_price = 0.0
+    pending_exit = False 
 
-    for i in range(65, len(df)-1):
-        yesterday = df.iloc[i-1]
-        today = df.iloc[i]
-        tomorrow = df.iloc[i+1]
-
-        if not in_position:
-            # Setup 條件：今日 >= 45 且昨日 < 45
-            if not setup_active and today['Score'] >= 45 and yesterday['Score'] < 45:
-                setup_active = True
-                signal_day_high = today['High']
-                entry_score = today['Score']
-
-            if setup_active:
-                if today['Score'] < 45:
-                    setup_active = False
-                elif tomorrow['High'] > signal_day_high:
-                    in_position = True
-                    setup_active = False
-                    entry_price = max(tomorrow['Open'], signal_day_high)
-                    entry_date = tomorrow['Date']
-                    entry_idx = i + 1
-                    peak_price = entry_price
-                    trade_max_drawdown = 0.0
-                    
-                    # 鎖定進場當日的動態停損點
-                    stop_loss_price = entry_price - (2 * today['ATR20'])
-        else:
-            # 倉位監控與更新最大回撤
-            peak_price = max(peak_price, tomorrow['High'])
-            trade_max_drawdown = min(trade_max_drawdown, (tomorrow['Low'] - peak_price) / peak_price)
-
-            # 離場條件 1: 觸發動態停損
-            if tomorrow['Low'] <= stop_loss_price:
-                exit_price = min(tomorrow['Open'], stop_loss_price)
-                exit_date = tomorrow['Date']
-                exit_idx = i + 1
-                
-                p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, peak_price, trade_max_drawdown)
-                
-                trades.append((
-                    strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-                    entry_price, exit_price, p, h, m, d, entry_score
-                ))
-                in_position = False
-
-            # 離場條件 2: 跌破 MA20
-            elif tomorrow['Close'] < tomorrow['MA20']:
-                if i + 2 < len(df):
-                    next_day = df.iloc[i + 2]
-                    exit_price = next_day['Open']
-                    exit_date = next_day['Date']
-                    exit_idx = i + 2
-                    
-                    temp_peak = max(peak_price, next_day['High'])
-                    temp_drawdown = (next_day['Low'] - temp_peak) / temp_peak
-                    final_mdd = min(trade_max_drawdown, temp_drawdown)
-                    
-                    p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
-                else:
-                    last_day = df.iloc[-1]
-                    exit_price = last_day['Close']
-                    exit_date = last_day['Date']
-                    exit_idx = len(df) - 1
-                    
-                    temp_peak = max(peak_price, last_day['High'])
-                    temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
-                    final_mdd = min(trade_max_drawdown, temp_drawdown)
-                    
-                    p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
+    for i in range(65, len(df)):
+        curr_bar = df.iloc[i]
+        prev_bar = df.iloc[i-1]
+        
+        # NaN 防護 (防呆機制)
+        if pd.isna(curr_bar['ATR20']):
+            continue
             
-                trades.append((
-                    strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-                    entry_price, exit_price, p, h, m, d, entry_score
-                ))
+        if in_position:
+            # 1. 執行跨日預定出場 (昨日觸發跌破 MA20，今日開盤出場)
+            if pending_exit:
+                exit_price = curr_bar['Open']
+                exit_date = curr_bar['Date']
+                p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, i, peak_price, trade_max_drawdown)
+                trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
                 in_position = False
+                pending_exit = False
+                continue # 出場當天不考慮重新進場
+                
+            # 2. 更新持倉指標
+            peak_price = max(peak_price, curr_bar['High'])
+            trade_max_drawdown = min(trade_max_drawdown, (curr_bar['Low'] - peak_price) / peak_price)
+            
+            # 3. 盤中觸發動態停損
+            if curr_bar['Low'] <= stop_loss_price:
+                exit_price = min(curr_bar['Open'], stop_loss_price)
+                exit_date = curr_bar['Date']
+                p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, i, peak_price, trade_max_drawdown)
+                trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
+                in_position = False
+                continue
+                
+            # 4. 盤後檢查出場條件
+            if curr_bar['Close'] < curr_bar['MA20']:
+                pending_exit = True
+                
+        else:
+            # 尚未進場，處理 Setup 與進場邏輯
+            if setup_active and curr_bar['High'] > setup_high:
+                # 突破觸發進場
+                in_position = True
+                setup_active = False
+                entry_price = max(curr_bar['Open'], setup_high)
+                entry_date = curr_bar['Date']
+                entry_idx = i
+                peak_price = max(entry_price, curr_bar['High'])
+                trade_max_drawdown = min(0.0, (curr_bar['Low'] - peak_price) / peak_price)
+                stop_loss_price = entry_price - (2 * prev_bar['ATR20'])
+                
+                # 進場當日若遭遇極端洗盤直接觸發停損
+                if curr_bar['Low'] <= stop_loss_price:
+                    exit_price = stop_loss_price
+                    exit_date = curr_bar['Date']
+                    p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, i, peak_price, trade_max_drawdown)
+                    trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
+                    in_position = False
+                    continue
                     
-    # 回測結束，強制平倉未結算的倉位
+                # 進場當日若收盤跌破 MA20，排定明日開盤出場
+                if curr_bar['Close'] < curr_bar['MA20']:
+                    pending_exit = True
+            else:
+                # 處理 Setup 狀態流轉
+                if setup_active:
+                    if curr_bar['Low'] < setup_low:
+                        setup_active = False # 型態破壞失效
+                    elif curr_bar['Score'] >= 45:
+                        setup_high = max(setup_high, curr_bar['High']) # 滾動高點更新
+                        setup_countdown = 3 # 重置倒數
+                    else:
+                        setup_countdown -= 1
+                        if setup_countdown <= 0:
+                            setup_active = False # 時間到期失效
+                            
+                # 產生新 Setup
+                if not setup_active and curr_bar['Score'] >= 45 and prev_bar['Score'] < 45:
+                    setup_active = True
+                    setup_high = curr_bar['High']
+                    setup_low = curr_bar['Low']
+                    setup_countdown = 3
+                    entry_score = curr_bar['Score']
+                    
+    # 回測資料底端，強制平倉
     if in_position:
-        last_day = df.iloc[-1]
-        exit_price = last_day['Close']
-        exit_date = last_day['Date']
-        exit_idx = len(df) - 1
+        last_bar = df.iloc[-1]
+        exit_price = last_bar['Close']
+        exit_date = last_bar['Date']
+        p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, len(df)-1, peak_price, trade_max_drawdown)
+        trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
         
-        temp_peak = max(peak_price, last_day['High'])
-        temp_drawdown = (last_day['Low'] - temp_peak) / temp_peak
-        final_mdd = min(trade_max_drawdown, temp_drawdown)
+    # 結算最後一天的最新潛力標的狀態，供 Telegram 報表使用
+    active_setup_info = None
+    if not in_position and setup_active:
+        last_bar = df.iloc[-1]
+        atr20 = last_bar['ATR20']
+        stop_target = setup_high - (2 * atr20)
+        risk_pct = (setup_high - stop_target) / setup_high * 100 if setup_high > 0 else 0
+        active_setup_info = {
+            'ticker': ticker,
+            'score': int(last_bar['Score']),
+            'entry_target': setup_high,
+            'stop_target': stop_target,
+            'risk_pct': risk_pct
+        }
         
-        p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, exit_idx, temp_peak, final_mdd)
-        
-        trades.append((
-            strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'),
-            entry_price, exit_price, p, h, m, d, entry_score
-        ))
-        
-    return trades
+    return trades, df, active_setup_info
 
-def calculate_strategy(df, ticker, strategy_version="v02.18"):  
+def calculate_strategy(df, ticker, strategy_version="v02.19"):  
     """總指揮官：依序呼叫指標、訊號、交易模擬模組"""
     df = df.sort_values('Date').dropna().reset_index(drop=True)
     
     df = calculate_indicator(df)
     df = generate_signal(df)
-    trades = simulate_trade(df, ticker, strategy_version)
+    trades, df, active_setup_info = simulate_trade(df, ticker, strategy_version)
     
-    return trades, df
+    return trades, df, active_setup_info
 
 # ==============================
 # Prt.04 歷史資料同步
@@ -436,7 +455,7 @@ def generate_performance_report(conn, version):
 def run_0050_batch(conn):
     print("啟動 TW50 掃描與回測...")
 
-    strategy_version = "v02.18"
+    strategy_version = "v02.19"
     tickers = tw50_tickers
     alerts_setup = []
     alerts_trigger = []
@@ -461,17 +480,13 @@ def run_0050_batch(conn):
                 df_ticker = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                 df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
                 
-                all_trades, df_processed = calculate_strategy(df_ticker, ticker, strategy_version)
+                all_trades, df_processed, active_setup_info = calculate_strategy(df_ticker, ticker, strategy_version)
                 
-                if not df_processed.empty:
-                    last_row = df_processed.iloc[-1]
-                    if last_row['Score'] >= 45:
-                        entry_target = last_row['High']
-                        atr20 = last_row['ATR20']
-                        stop_target = entry_target - (2 * atr20)
-                        risk_pct = (entry_target - stop_target) / entry_target * 100 if entry_target > 0 else 0
-                        
-                        alerts_setup.append(f"• {ticker} (Score: {int(last_row['Score'])}, 明日突破 {entry_target:.2f} 買進, 防守 {stop_target:.2f} [-{risk_pct:.1f}%])")
+                # 🎯 直譯狀態機跑出的最終 Setup 狀態
+                if active_setup_info:
+                    alerts_setup.append(
+                        f"• {active_setup_info['ticker']} (Score: {active_setup_info['score']}, 明日突破 {active_setup_info['entry_target']:.2f} 買進, 防守 {active_setup_info['stop_target']:.2f} [-{active_setup_info['risk_pct']:.1f}%])"
+                    )
                 
                 if all_trades:
                     conn.executemany('''
@@ -503,12 +518,13 @@ def run_0050_batch(conn):
     ]
 
     if alerts_setup:
+        # 使用字串中的分數進行降冪排序
         try:
             alerts_setup_sorted = sorted(alerts_setup, key=lambda x: int(x.split('Score: ')[1].split(',')[0]), reverse=True)
         except Exception:
             alerts_setup_sorted = alerts_setup 
 
-        msg_parts.append("================\n🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n" + "\n".join(alerts_setup_sorted))
+        msg_parts.append("================\n🎯 <b>滿足潛力起漲 (近期 Setup 有效)</b>\n" + "\n".join(alerts_setup_sorted))
 
     if alerts_trigger:
         msg_parts.append("================\n🔥 <b>最新交易日執行回報</b>\n" + "\n".join(alerts_trigger))
