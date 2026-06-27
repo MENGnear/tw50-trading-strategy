@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐•
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.12 (按鈕更名「手動回測」並整合 SQLite 總體績效報表)
+# 策略版本 : v03.13 (同步後台 v02.16 真實 Portfolio Equity 演算法與查詢標籤)
 # ==========================================================
 
 import streamlit as st
@@ -25,7 +25,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.12"
+APP_VERSION = "v03.13"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 # --- 相容性 Rerun 處理 ---
@@ -229,12 +229,13 @@ def calculate_v0212_score(df_stock):
     return res
 
 # ==============================
-# Prt.05 總體績效結算模組 (從 main.py 移植)
+# Prt.05 總體績效結算模組 (已升級為 Portfolio Equity 演算法)
 # ==============================
 def generate_performance_report(conn, version):
     try:
+        # 新增抓取 entry_date 以利建立每日時間軸
         df = pd.read_sql_query(
-            "SELECT profit_pct, exit_date FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
+            "SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
             conn, params=(version,)
         )
         if df.empty:
@@ -244,7 +245,7 @@ def generate_performance_report(conn, version):
         win_trades = df[df['profit_pct'] > 0]
         loss_trades = df[df['profit_pct'] <= 0]
         
-        win_rate = (len(win_trades) / total_trades) * 100
+        win_rate = (len(win_trades) / total_trades) * 100 if total_trades > 0 else 0
         
         gross_profit = win_trades['profit_pct'].sum()
         gross_loss = abs(loss_trades['profit_pct'].sum())
@@ -254,23 +255,48 @@ def generate_performance_report(conn, version):
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # 理論資金曲線 (假設每次投入單位本金，採複利計算)
-        df['equity'] = (1 + df['profit_pct']).cumprod()
-        df['peak'] = df['equity'].cummax()
-        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
-        sys_mdd = df['drawdown'].min() * 100
+        # --- 🎯 資金組合曲線 (Portfolio Equity Curve) 模擬 ---
+        # 假設資金管理設定：每筆交易固定投入總資產的 10%
+        weight_per_trade = 0.10
         
-        # CAGR (年化報酬)
+        df['entry_date'] = pd.to_datetime(df['entry_date'])
         df['exit_date'] = pd.to_datetime(df['exit_date'])
-        min_date = df['exit_date'].min()
-        max_date = df['exit_date'].max()
-        days = (max_date - min_date).days
         
-        final_equity = df['equity'].iloc[-1]
-        if days > 0 and final_equity > 0:
-            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+        daily_records = []
+        
+        # 將每筆交易利潤依持倉天數「線性平攤」，模擬每日標記回溯 (Daily Mark-to-Market)
+        for _, row in df.iterrows():
+            dr = pd.date_range(start=row['entry_date'], end=row['exit_date'], freq='D')
+            hold_days = len(dr) - 1
+            if hold_days > 0:
+                daily_pnl = (row['profit_pct'] * weight_per_trade) / hold_days
+                for d in dr[1:]:
+                    daily_records.append({'date': d, 'pnl': daily_pnl})
+            else:
+                daily_records.append({'date': row['exit_date'], 'pnl': row['profit_pct'] * weight_per_trade})
+                
+        if daily_records:
+            daily_df = pd.DataFrame(daily_records)
+            # 依照日期將所有平行持倉的 PnL 加總
+            port_daily = daily_df.groupby('date')['pnl'].sum().reset_index()
+            port_daily = port_daily.sort_values('date')
+            
+            # 建立每日真實總體淨值
+            port_daily['equity'] = 1.0 + port_daily['pnl'].cumsum()
+            port_daily['peak'] = port_daily['equity'].cummax()
+            port_daily['drawdown'] = (port_daily['equity'] - port_daily['peak']) / port_daily['peak']
+            
+            sys_mdd = port_daily['drawdown'].min() * 100
+            
+            days = (port_daily['date'].max() - port_daily['date'].min()).days
+            final_equity = port_daily['equity'].iloc[-1]
+            if days > 0 and final_equity > 0:
+                cagr = ((final_equity ** (365.25 / days)) - 1) * 100
+            else:
+                cagr = (final_equity - 1) * 100 
         else:
-            cagr = (final_equity - 1) * 100 
+            sys_mdd = 0
+            cagr = 0
         
         report = (
             f"================\n"
@@ -280,7 +306,8 @@ def generate_performance_report(conn, version):
             f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
-            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%"
+            f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
+            f"<i>*註: CAGR與MDD採固定10%資金平鋪持倉進行每日淨值模擬</i>"
         )
         return report
     except Exception as e:
@@ -356,11 +383,11 @@ def main():
                     else:
                         msg += "盤後無新增訊號。\n"
                     
-                    # 🎯 讀取 SQLite 中的 v02.15 績效報表
+                    # 🎯 對齊 v02.16 查詢標籤
                     try:
                         if os.path.exists("tw50_strategy.db"):
                             conn = sqlite3.connect("tw50_strategy.db")
-                            report = generate_performance_report(conn, "v02.15")
+                            report = generate_performance_report(conn, "v02.16")
                             msg += f"\n{report}\n"
                             conn.close()
                         else:
