@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐•
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 策略版本 : v03.13 (同步後台 v02.16 真實 Portfolio Equity 演算法與查詢標籤)
+# 程式版本 : v03.14 (完全對齊後台 v02.23 參數解耦與 ATR 停損模組)
 # ==========================================================
 
 import streamlit as st
@@ -16,6 +16,7 @@ import datetime
 import pytz
 import sqlite3
 from streamlit_autorefresh import st_autorefresh
+from dataclasses import dataclass
 
 # --- 頁面基本設定 ---
 st.set_page_config(
@@ -25,8 +26,28 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-APP_VERSION = "v03.13"
+# ==============================
+# Prt.00 全域常數與設定 (對齊後台 main.py)
+# ==============================
+APP_VERSION = "v03.14"
+STRATEGY_VERSION = "v02.23"
+DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
+
+@dataclass
+class StrategyConfig:
+    ma_fast: int = 20
+    ma_slow: int = 60
+    vma_period: int = 5
+    vol_ratio: float = 1.3
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    atr_period: int = 20
+    atr_multiplier: float = 2.0
+    setup_score_threshold: int = 45
+    max_setup_days: int = 5
+    capital_weight_per_trade: float = 0.10
 
 # --- 相容性 Rerun 處理 ---
 def safe_rerun():
@@ -118,7 +139,7 @@ html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !impo
 .txt-bold-val { color: #f1f5f9; font-size: 0.8rem; font-weight: 600; padding-left: 4px; }
 
 /* 行動警示框 */
-.custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.85rem; font-weight: 700; box-sizing: border-box; }
+.custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
 .action-buy { color: #f2cc60; background-color: rgba(242, 204, 96, 0.15) !important; border: 1px dashed #f2cc60; }
 .action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; }
 </style>
@@ -163,50 +184,35 @@ def fetch_custom_stock(ticker):
     except: return None
 
 # ==============================
-# Prt.04 技術指標與 v02.12 安全評分
+# Prt.04 核心儀表板指標與評分模組 (取代舊的 calculate_v0212_score)
 # ==============================
-def calculate_v0212_score(df_stock):
+def calculate_dashboard_metrics(df_stock, config: StrategyConfig):
     df = df_stock.dropna(subset=['Close']).sort_values('Date').copy()
     if len(df) < 2: return None
 
-    df['MA20'] = df['Close'].rolling(window=min(20, len(df))).mean().fillna(0)
-    df['MA60'] = df['Close'].rolling(window=min(60, len(df))).mean().fillna(0)
-    df['V_MA5'] = df['Volume'].rolling(window=min(5, len(df))).mean().fillna(0)
-    
-    if len(df) >= 26:
-        ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-        ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['DIF'] = ema12 - ema26
-        df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
-        df['MACD_Hist'] = (df['DIF'] - df['DEA']).fillna(0)
-    else:
-        df['MACD_Hist'] = 0.0
+    # 對齊後台 StrategyConfig 的指標計算
+    df['MA_Fast'] = df['Close'].rolling(config.ma_fast).mean().fillna(0)
+    df['MA_Slow'] = df['Close'].rolling(config.ma_slow).mean().fillna(0)
+    df['V_MA'] = df['Volume'].rolling(config.vma_period).mean().fillna(0)
 
-    today = df.iloc[-1]
-    yest = df.iloc[-2] if len(df) > 1 else today
+    ema_fast = df['Close'].ewm(span=config.macd_fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=config.macd_slow, adjust=False).mean()
+    df['DIF'] = ema_fast - ema_slow
+    df['DEA'] = df['DIF'].ewm(span=config.macd_signal, adjust=False).mean()
+    df['MACD_Hist'] = (df['DIF'] - df['DEA']).fillna(0)
 
-    today_close = today.get('Close', 0)
-    today_vol = today.get('Volume', 0)
-    today_macd = today.get('MACD_Hist', 0)
-    yest_macd = yest.get('MACD_Hist', 0)
-    today_ma20 = today.get('MA20', 0)
-    today_ma60 = today.get('MA60', 0)
-    today_vma5 = today.get('V_MA5', 0)
+    # ATR 計算
+    df['Prev_Close'] = df['Close'].shift(1).fillna(df['Close'])
+    df['TR'] = np.maximum(
+        df['High'] - df['Low'],
+        np.maximum(
+            abs(df['High'] - df['Prev_Close']),
+            abs(df['Low'] - df['Prev_Close'])
+        )
+    )
+    df['ATR'] = df['TR'].rolling(window=config.atr_period).mean().fillna(0)
 
-    t1 = 15 if (today_macd > yest_macd) else 0
-    m1 = 10 if (today_ma20 > 0 and today_close > today_ma20) else 0
-    
-    m2 = 0
-    if len(df) >= 6:
-        ma20_past = df['MA20'].iloc[-6]
-        if ma20_past > 0 and ((today_ma20 / ma20_past) - 1) > 0.01:
-            m2 = 15
-            
-    m3 = 10 if (today_ma60 > 0 and today_ma20 > today_ma60) else 0
-    v1 = 10 if (today_vma5 > 0 and today_vol > (today_vma5 * 1.3)) else 0
-    
-    total_score = int(t1 + m1 + m2 + m3 + v1)
-
+    # 儀表板專用 RSI
     df['RSI_6'], df['RSI_14'], df['RSI_24'] = 50.0, 50.0, 50.0
     if len(df) >= 24:
         delta = df['Close'].diff()
@@ -215,29 +221,54 @@ def calculate_v0212_score(df_stock):
             ema_up = up.ewm(com=p-1, adjust=False).mean()
             ema_down = down.ewm(com=p-1, adjust=False).mean()
             df[f'RSI_{p}'] = 100 - (100 / (1 + ema_up / ema_down.replace(0, 1e-9)))
+
+    # 抽取最後兩日進行訊號判斷
+    today = df.iloc[-1]
+    yest = df.iloc[-2] if len(df) > 1 else today
+
+    # 語意化評分系統 (完全對齊 main.py)
+    score_macd_trend = 15 if (today['MACD_Hist'] > yest['MACD_Hist']) else 0
+    score_ma20_cross = 10 if (today['MA_Fast'] > 0 and today['Close'] > today['MA_Fast']) else 0
     
+    score_ma20_slope = 0
+    if len(df) >= 6:
+        ma_fast_past = df['MA_Fast'].iloc[-6]
+        if ma_fast_past > 0 and ((today['MA_Fast'] / ma_fast_past) - 1) > 0.01:
+            score_ma20_slope = 15
+            
+    score_ma60_trend = 10 if (today['MA_Slow'] > 0 and today['MA_Fast'] > today['MA_Slow']) else 0
+    score_volume_burst = 10 if (today['V_MA'] > 0 and today['Volume'] > (today['V_MA'] * config.vol_ratio)) else 0
+    
+    total_score = int(sum([score_macd_trend, score_ma20_cross, score_ma20_slope, score_ma60_trend, score_volume_burst]))
+
     res = {
         'Date': today.get('Date', pd.Timestamp.now()),
-        'Close': today_close,
+        'Close': today.get('Close', 0),
         'High': today.get('High', 0),
         'Score': total_score,
-        's1': t1, 's2': m1, 's3': m2, 's4': m3, 's5': v1,
-        'RSI_6': df['RSI_6'].iloc[-1], 
-        'RSI_14': df['RSI_14'].iloc[-1], 
-        'RSI_24': df['RSI_24'].iloc[-1]
+        's1': score_macd_trend, 
+        's2': score_ma20_cross, 
+        's3': score_ma20_slope, 
+        's4': score_ma60_trend, 
+        's5': score_volume_burst,
+        'RSI_6': today['RSI_6'], 
+        'RSI_14': today['RSI_14'], 
+        'RSI_24': today['RSI_24'],
+        'ATR': today['ATR']
     }
     return res
 
 # ==============================
-# Prt.05 總體績效結算模組 (已升級為 Portfolio Equity 演算法)
+# Prt.05 總體績效結算模組 (對齊 main.py StrategyConfig 注入)
 # ==============================
-def generate_performance_report(conn, version):
+def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME):
     try:
-        # 新增抓取 entry_date 以利建立每日時間軸
-        df = pd.read_sql_query(
-            "SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
-            conn, params=(version,)
-        )
+        with sqlite3.connect(db_name) as conn:
+            df = pd.read_sql_query(
+                "SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", 
+                conn, params=(version,)
+            )
+            
         if df.empty:
             return "================\n📈 <b>策略績效健檢</b>\n目前無足夠歷史交易資料可供統計。"
             
@@ -255,63 +286,42 @@ def generate_performance_report(conn, version):
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # --- 🎯 資金組合曲線 (Portfolio Equity Curve) 模擬 ---
-        # 假設資金管理設定：每筆交易固定投入總資產的 10%
-        weight_per_trade = 0.10
+        # 資金組合權重由 Config 動態注入
+        weight_per_trade = config.capital_weight_per_trade
         
-        df['entry_date'] = pd.to_datetime(df['entry_date'])
         df['exit_date'] = pd.to_datetime(df['exit_date'])
+        df['realized_pnl'] = df['profit_pct'] * weight_per_trade
+        df['equity'] = 1.0 + df['realized_pnl'].cumsum()
         
-        daily_records = []
+        df['peak'] = df['equity'].cummax()
+        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
         
-        # 將每筆交易利潤依持倉天數「線性平攤」，模擬每日標記回溯 (Daily Mark-to-Market)
-        for _, row in df.iterrows():
-            dr = pd.date_range(start=row['entry_date'], end=row['exit_date'], freq='D')
-            hold_days = len(dr) - 1
-            if hold_days > 0:
-                daily_pnl = (row['profit_pct'] * weight_per_trade) / hold_days
-                for d in dr[1:]:
-                    daily_records.append({'date': d, 'pnl': daily_pnl})
-            else:
-                daily_records.append({'date': row['exit_date'], 'pnl': row['profit_pct'] * weight_per_trade})
-                
-        if daily_records:
-            daily_df = pd.DataFrame(daily_records)
-            # 依照日期將所有平行持倉的 PnL 加總
-            port_daily = daily_df.groupby('date')['pnl'].sum().reset_index()
-            port_daily = port_daily.sort_values('date')
-            
-            # 建立每日真實總體淨值
-            port_daily['equity'] = 1.0 + port_daily['pnl'].cumsum()
-            port_daily['peak'] = port_daily['equity'].cummax()
-            port_daily['drawdown'] = (port_daily['equity'] - port_daily['peak']) / port_daily['peak']
-            
-            sys_mdd = port_daily['drawdown'].min() * 100
-            
-            days = (port_daily['date'].max() - port_daily['date'].min()).days
-            final_equity = port_daily['equity'].iloc[-1]
-            if days > 0 and final_equity > 0:
-                cagr = ((final_equity ** (365.25 / days)) - 1) * 100
-            else:
-                cagr = (final_equity - 1) * 100 
+        sys_mdd = df['drawdown'].min() * 100 if not df.empty else 0
+        
+        days = (df['exit_date'].max() - df['exit_date'].min()).days if not df.empty else 0
+        final_equity = df['equity'].iloc[-1] if not df.empty else 1.0
+        
+        if days > 0 and final_equity > 0:
+            cagr = ((final_equity ** (365.25 / days)) - 1) * 100
         else:
-            sys_mdd = 0
-            cagr = 0
+            cagr = (final_equity - 1) * 100 
         
         report = (
             f"================\n"
-            f"📈 <b>策略歷史績效健檢 (System Metrics)</b>\n"
+            f"📈 <b>策略已實現績效 (Trade-Based Metrics)</b>\n"
             f"• 總交易筆數: {total_trades} 筆\n"
             f"• 勝率 (Win Rate): {win_rate:.1f}%\n"
             f"• 獲利因子 (Profit Factor): {profit_factor:.2f}\n"
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
             f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
-            f"<i>*註: CAGR與MDD採固定10%資金平鋪持倉進行每日淨值模擬</i>"
+            f"<i>*註: 採用 Sequential Trade Equity 算法，依據設定每筆固定投入 {weight_per_trade*100:.0f}% 資金計算。</i>"
         )
         return report
+    except sqlite3.Error as db_e:
+        return f"================\n⚠️ 績效統計資料庫錯誤: {db_e}"
     except Exception as e:
-        return f"================\n⚠️ 績效統計發生錯誤: {e}"
+        return f"================\n⚠️ 績效統計發生未預期錯誤: {e}"
 
 # ==============================
 # Prt.06 主程式與渲染大廳
@@ -320,9 +330,11 @@ def main():
     st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
     st_autorefresh(interval=60 * 1000, key="refresh")
     
+    # 實例化策略配置參數
+    config = StrategyConfig()
+    
     df_raw, status_msg = load_csv_data()
     
-    # 預設歷史區間顯示，若讀取到資料則動態更新
     date_range_str = "2021/06/25 ~ 2026/06/24"
     if not df_raw.empty and 'Date' in df_raw.columns:
         valid_dates = df_raw['Date'].dropna()
@@ -349,7 +361,8 @@ def main():
         if pd.isna(tk): continue 
         try:
             df_tk = combined_df[combined_df['ticker'] == tk]
-            data = calculate_v0212_score(df_tk)
+            # 傳入 Config 計算指標與分數
+            data = calculate_dashboard_metrics(df_tk, config)
             if data:
                 data['ticker'] = tk
                 display_list.append(data)
@@ -368,30 +381,29 @@ def main():
                 st.cache_data.clear()
                 safe_rerun()
                 
-            # 🎯 更改按鈕名稱為「手動回測」
+            # 🎯 執行手動回測 (綁定 Config 與 STRATEGY_VERSION)
             if st.button("▶️ 手動回測", use_container_width=True):
                 with st.spinner("🚀 正在執行判定與通報..."):
                     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
-                    msg = f"📊 <b>台股 50 戰情室 (手動健康檢查)</b>\n"
+                    msg = f"📊 <b>{STRATEGY_VERSION} 台股 50 戰情室 (手動健康檢查)</b>\n"
                     msg += f"🕒 {now_str} 回測\n================\n"
                     
-                    setups = [d for d in display_list if d.get('Score', 0) >= 45]
+                    setups = [d for d in display_list if d.get('Score', 0) >= config.setup_score_threshold]
                     if setups:
-                        msg += "🎯 <b>滿足潛力起漲 (Score >= 45)</b>\n"
+                        msg += f"🎯 <b>滿足潛力起漲 (Score >= {config.setup_score_threshold})</b>\n"
                         for s in setups:
-                            msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進)\n"
+                            stop_tgt = s.get('High', 0.0) - (config.atr_multiplier * s.get('ATR', 0))
+                            risk_pct = (s.get('High', 0.0) - stop_tgt) / s.get('High', 1e-9) * 100 if s.get('High', 0.0) > 0 else 0
+                            msg += f"• {s['ticker']} (Score: {s['Score']}, 明日突破 {s.get('High', 0.0):.2f} 買進, 防守 {stop_tgt:.2f} [-{risk_pct:.1f}%])\n"
                     else:
                         msg += "盤後無新增訊號。\n"
                     
-                    # 🎯 對齊 v02.16 查詢標籤
                     try:
-                        if os.path.exists("tw50_strategy.db"):
-                            conn = sqlite3.connect("tw50_strategy.db")
-                            report = generate_performance_report(conn, "v02.16")
+                        if os.path.exists(DB_NAME):
+                            report = generate_performance_report(STRATEGY_VERSION, config, DB_NAME)
                             msg += f"\n{report}\n"
-                            conn.close()
                         else:
-                            msg += "\n================\n⚠️ 找不到策略資料庫 (tw50_strategy.db)，請確認後台回測已執行。\n"
+                            msg += f"\n================\n⚠️ 找不到策略資料庫 ({DB_NAME})，請確認後台回測已執行。\n"
                     except Exception as db_e:
                         msg += f"\n================\n⚠️ 讀取策略資料庫失敗: {db_e}\n"
                         
@@ -415,11 +427,12 @@ def main():
                         st.session_state.custom_watch.append(nt.upper())
                     safe_rerun()
 
-        # 2. 版本與歷史區間移至左下角 (灰色底 + 白色框線)
+        # 2. 版本與歷史區間移至左下角 (顯示雙版本狀態)
         st.markdown(f'''
         <div class="sidebar-bottom-block">
             <div style="font-weight: 700; color: #ffffff; margin-bottom: 6px; font-size: 0.95rem;">ℹ️ 系統狀態</div>
-            <div style="color: #e2e8f0; font-size: 0.82rem;">系統版本: {APP_VERSION}</div>
+            <div style="color: #e2e8f0; font-size: 0.82rem;">UI 版本: {APP_VERSION}</div>
+            <div style="color: #e2e8f0; font-size: 0.82rem;">核心策略: {STRATEGY_VERSION}</div>
             <div style="color: #e2e8f0; font-size: 0.82rem; margin-top: 4px; line-height: 1.4;">
                 🕒 歷史資料區間:<br><span style="font-family: monospace;">{date_range_str}</span>
             </div>
@@ -432,6 +445,7 @@ def main():
         score = d.get('Score', 0)
         price = d.get('Close', 0.0)
         high_today = d.get('High', 0.0)
+        atr = d.get('ATR', 0.0)
         
         price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
         high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
@@ -439,9 +453,11 @@ def main():
         # 判斷多頭動能
         rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
         
-        # 行動提示框
-        if score >= 45:
-            action_html = f'<div class="custom-alert-box action-buy">🎯 明日突破 {high_str} 買進</div>'
+        # 🎯 升級 UI 小卡，加入動態 ATR 停損與風險估算
+        if score >= config.setup_score_threshold:
+            stop_tgt = high_today - (config.atr_multiplier * atr)
+            risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
+            action_html = f'<div class="custom-alert-box action-buy">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
         else:
             action_html = f'<div class="custom-alert-box action-wait">⏳ 觀察多頭動能續航</div>'
 
