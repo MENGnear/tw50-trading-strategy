@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.18 (強制 CSS 覆寫：修復側邊欄白色框線與純白收折箭頭)
+# 程式版本 : v03.19 (參考 Showmethemoney 樣板：修正側邊欄白色框線與純白收折箭頭寫法)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.18"
+APP_VERSION = "v03.19"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -86,7 +86,7 @@ def send_telegram_alert(message):
 
 # ==============================
 # Prt.02 頂級深色優化視覺 CSS 
-# (暴力修正版：確保白色框線與箭頭絕對生效)
+# (完全採用 Showmethemoney 穩定寫法，僅邊框指定為白色)
 # ==============================
 st.markdown(r'''
 <style>
@@ -99,24 +99,8 @@ h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-/* 🌟 1. 強制功能區塊為白色框線 (提高層級到 div) */
-div[data-testid="stVerticalBlockBorderWrapper"] { 
-    background-color: #1e293b !important; 
-    border: 1px solid #ffffff !important; 
-    border-radius: 12px !important; 
-    padding: 15px !important; 
-    margin-bottom: 10px !important; 
-}
-
-/* 🌟 2. 強制收折箭頭為純白色 (覆蓋 fill 與 stroke) */
-[data-testid="stSidebar"] svg, 
-[data-testid="collapsedControl"] svg, 
-[data-testid="stSidebarCollapseButton"] svg, 
-button[kind="header"] svg { 
-    color: #ffffff !important; 
-    fill: #ffffff !important; 
-    stroke: #ffffff !important; 
-}
+[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #ffffff !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
+[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
 
 .stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
@@ -144,7 +128,7 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 .action-buy { color: #f2cc60; background-color: rgba(242, 204, 96, 0.15) !important; border: 1px dashed #f2cc60; }
 .action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; }
 </style>
-''', unsafe_allow_html=True)
+''' , unsafe_allow_html=True)
 
 # ==============================
 # Prt.03 資料讀取與暴力清洗
