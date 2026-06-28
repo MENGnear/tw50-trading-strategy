@@ -2,14 +2,13 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
 # 檔案名稱 : main.py
-# 策略版本 : v02.22 (企業級重構：Context Manager, Enum, Logging, SRP 訊息抽離)
+# 策略版本 : v02.23 (新增資料庫唯一索引、導入 StrategyConfig 參數物件化)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 功能說明：
 # 1. 台股50成分股歷史資料同步
-# 2. 技術指標計算 (MA、MACD、ATR)
-# 3. Breakout Strategy 回測
-# 4. SQLite 資料儲存與管理
-# 5. Telegram 即時訊號與「策略已實現績效」通知
+# 2. 技術指標計算與策略回測 (支援 StrategyConfig 參數注入)
+# 3. SQLite 資料儲存與管理 (具備 Unique Index 防護)
+# 4. Telegram 即時訊號與「策略已實現績效」通知
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 
 import pandas as pd
@@ -23,11 +22,12 @@ import urllib.error
 import json
 import logging
 from enum import Enum
+from dataclasses import dataclass
 
 # ==============================
 # Prt.00 全域常數與設定 (Single Source of Truth)
 # ==============================
-STRATEGY_VERSION = "v02.22"
+STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -50,7 +50,23 @@ tw50_tickers = [
     '9904.TW', '1590.TW'
 ]
 
-# 狀態機列舉 (取代 Magic Strings/Booleans)
+# 🎯 策略參數配置物件 (未來 Grid Search 專用)
+@dataclass
+class StrategyConfig:
+    ma_fast: int = 20
+    ma_slow: int = 60
+    vma_period: int = 5
+    vol_ratio: float = 1.3
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
+    atr_period: int = 20
+    atr_multiplier: float = 2.0
+    setup_score_threshold: int = 45
+    max_setup_days: int = 5
+    capital_weight_per_trade: float = 0.10
+
+# 狀態機列舉
 class TradeState(Enum):
     IDLE = 0
     SETUP = 1
@@ -84,7 +100,6 @@ def send_telegram_alert(message):
         logging.error(f"❌ Telegram 推播發生未預期錯誤: {e}")
 
 def build_telegram_report(version, alerts_setup, alerts_trigger, perf_report):
-    """SRP: 專責組裝 Telegram 訊息格式"""
     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
     msg_parts = [
         f"📊 <b>{version} 台股 50 戰情室 (自動盤後更新)</b>",
@@ -110,7 +125,7 @@ def build_telegram_report(version, alerts_setup, alerts_trigger, perf_report):
     return "\n".join(msg_parts)
 
 # ==============================
-# Prt.02 SQLite 資料庫管理 (導入 Context Manager)
+# Prt.02 SQLite 資料庫管理 (導入 Unique Index)
 # ==============================
 def init_db(db_name=DB_NAME):
     try:
@@ -146,22 +161,28 @@ def init_db(db_name=DB_NAME):
             except sqlite3.OperationalError:
                 pass
                 
+            # 🎯 物理層級防止資料重複累積
+            cursor.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_uniq 
+                ON backtest_trades(version, ticker, entry_date)
+            ''')
+                
     except sqlite3.Error as db_e:
         logging.error(f"資料庫初始化失敗: {db_e}")
 
 # ==============================
-# Prt.03 核心策略模組 (v02.22)
+# Prt.03 核心策略模組 (v02.23 配置解耦)
 # ==============================
-def calculate_indicator(df):
-    """階段一：計算所有底層技術指標"""
-    df['MA20'] = df['Close'].rolling(20).mean()
-    df['MA60'] = df['Close'].rolling(60).mean()
-    df['V_MA5'] = df['Volume'].rolling(5).mean()
+def calculate_indicator(df, config: StrategyConfig):
+    """階段一：使用 Config 注入參數計算技術指標"""
+    df['MA_Fast'] = df['Close'].rolling(config.ma_fast).mean()
+    df['MA_Slow'] = df['Close'].rolling(config.ma_slow).mean()
+    df['V_MA'] = df['Volume'].rolling(config.vma_period).mean()
 
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['DIF'] = ema12 - ema26
-    df['DEA'] = df['DIF'].ewm(span=9, adjust=False).mean()
+    ema_fast = df['Close'].ewm(span=config.macd_fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=config.macd_slow, adjust=False).mean()
+    df['DIF'] = ema_fast - ema_slow
+    df['DEA'] = df['DIF'].ewm(span=config.macd_signal, adjust=False).mean()
     df['MACD_Hist'] = df['DIF'] - df['DEA']
     
     df['Prev_Close'] = df['Close'].shift(1)
@@ -172,16 +193,16 @@ def calculate_indicator(df):
             abs(df['Low'] - df['Prev_Close'])
         )
     )
-    df['ATR20'] = df['TR'].rolling(window=20).mean()
+    df['ATR'] = df['TR'].rolling(window=config.atr_period).mean()
     return df
 
-def generate_signal(df):
-    """階段二：依據指標計算策略訊號與評分 (語意化重構)"""
+def generate_signal(df, config: StrategyConfig):
+    """階段二：依據指標與 Config 計算策略訊號評分"""
     score_macd_trend = (df['MACD_Hist'] > df['MACD_Hist'].shift(1)).astype(int) * 15 
-    score_ma20_cross = (df['Close'] > df['MA20']).astype(int) * 10                    
-    score_ma20_slope = ((df['MA20'] / df['MA20'].shift(5) - 1) > 0.01).astype(int) * 15 
-    score_ma60_trend = (df['MA20'] > df['MA60']).astype(int) * 10                      
-    score_volume_burst = (df['Volume'] > df['V_MA5'] * 1.3).astype(int) * 10            
+    score_ma20_cross = (df['Close'] > df['MA_Fast']).astype(int) * 10                    
+    score_ma20_slope = ((df['MA_Fast'] / df['MA_Fast'].shift(5) - 1) > 0.01).astype(int) * 15 
+    score_ma60_trend = (df['MA_Fast'] > df['MA_Slow']).astype(int) * 10                      
+    score_volume_burst = (df['Volume'] > df['V_MA'] * config.vol_ratio).astype(int) * 10            
     
     df['Score'] = sum([
         score_macd_trend,
@@ -193,18 +214,16 @@ def generate_signal(df):
     return df
 
 def trade_statistics(entry_price, exit_price, entry_idx, exit_idx, peak_price, trade_max_drawdown):
-    """階段三：計算單筆交易的績效統計數據"""
     profit_pct = (exit_price - entry_price) / entry_price if entry_price > 0 else 0
     holding_bars = exit_idx - entry_idx
     max_p = (peak_price - entry_price) / entry_price if entry_price > 0 else 0
     trade_max_drawdown_pct = trade_max_drawdown * 100
     return profit_pct, holding_bars, max_p, trade_max_drawdown_pct
 
-def simulate_trade(df, ticker, strategy_version):
-    """階段四：無未來函數之事件驅動狀態機 (導入 Enum)"""
+def simulate_trade(df, ticker, config: StrategyConfig, strategy_version):
+    """階段四：使用 Config 驅動之事件狀態機"""
     trades = []
     
-    # 狀態機變數初始化
     state = TradeState.IDLE
     setup_high = 0.0
     setup_low = 0.0
@@ -223,11 +242,10 @@ def simulate_trade(df, ticker, strategy_version):
         curr_bar = df.iloc[i]
         prev_bar = df.iloc[i-1]
         
-        if pd.isna(curr_bar['ATR20']):
+        if pd.isna(curr_bar['ATR']):
             continue
             
         if state == TradeState.IN_POSITION:
-            # 1. 執行跨日預定出場
             if pending_exit:
                 exit_price = curr_bar['Open']
                 exit_date = curr_bar['Date']
@@ -237,11 +255,9 @@ def simulate_trade(df, ticker, strategy_version):
                 pending_exit = False
                 continue
                 
-            # 2. 更新持倉指標
             peak_price = max(peak_price, curr_bar['High'])
             trade_max_drawdown = min(trade_max_drawdown, (curr_bar['Low'] - peak_price) / peak_price)
             
-            # 3. 盤中觸發動態停損
             if curr_bar['Low'] <= stop_loss_price:
                 exit_price = min(curr_bar['Open'], stop_loss_price)
                 exit_date = curr_bar['Date']
@@ -250,21 +266,18 @@ def simulate_trade(df, ticker, strategy_version):
                 state = TradeState.IDLE
                 continue
                 
-            # 4. 盤後檢查出場條件
-            if curr_bar['Close'] < curr_bar['MA20']:
+            if curr_bar['Close'] < curr_bar['MA_Fast']:
                 pending_exit = True
                 
         else:
-            # 尚未進場，處理 Setup 與進場邏輯
             if state == TradeState.SETUP and curr_bar['High'] > setup_high:
-                # 突破觸發進場
                 state = TradeState.IN_POSITION
                 entry_price = max(curr_bar['Open'], setup_high)
                 entry_date = curr_bar['Date']
                 entry_idx = i
                 peak_price = max(entry_price, curr_bar['High'])
                 trade_max_drawdown = min(0.0, (curr_bar['Low'] - peak_price) / peak_price)
-                stop_loss_price = entry_price - (2 * prev_bar['ATR20'])
+                stop_loss_price = entry_price - (config.atr_multiplier * prev_bar['ATR'])
                 
                 if curr_bar['Low'] <= stop_loss_price:
                     exit_price = stop_loss_price
@@ -274,21 +287,19 @@ def simulate_trade(df, ticker, strategy_version):
                     state = TradeState.IDLE
                     continue
                     
-                if curr_bar['Close'] < curr_bar['MA20']:
+                if curr_bar['Close'] < curr_bar['MA_Fast']:
                     pending_exit = True
             else:
-                # 處理 Setup 狀態流轉
                 if state == TradeState.SETUP:
                     setup_age += 1
                     if curr_bar['Low'] < setup_low:
                         state = TradeState.IDLE
-                    elif setup_age > 5:
+                    elif setup_age > config.max_setup_days:
                         state = TradeState.IDLE
-                    elif curr_bar['Score'] >= 45:
+                    elif curr_bar['Score'] >= config.setup_score_threshold:
                         setup_high = max(setup_high, curr_bar['High'])
                             
-                # 產生新 Setup
-                if state == TradeState.IDLE and curr_bar['Score'] >= 45 and prev_bar['Score'] < 45:
+                if state == TradeState.IDLE and curr_bar['Score'] >= config.setup_score_threshold and prev_bar['Score'] < config.setup_score_threshold:
                     state = TradeState.SETUP
                     setup_high = curr_bar['High']
                     setup_low = curr_bar['Low']
@@ -305,8 +316,8 @@ def simulate_trade(df, ticker, strategy_version):
     active_setup_info = None
     if state == TradeState.SETUP:
         last_bar = df.iloc[-1]
-        atr20 = last_bar['ATR20']
-        stop_target = setup_high - (2 * atr20)
+        atr = last_bar['ATR']
+        stop_target = setup_high - (config.atr_multiplier * atr)
         risk_pct = (setup_high - stop_target) / setup_high * 100 if setup_high > 0 else 0
         active_setup_info = {
             'ticker': ticker,
@@ -318,12 +329,11 @@ def simulate_trade(df, ticker, strategy_version):
         
     return trades, df, active_setup_info
 
-def calculate_strategy(df, ticker, strategy_version=STRATEGY_VERSION):  
-    """總指揮官：依序呼叫指標、訊號、交易模擬模組"""
+def calculate_strategy(df, ticker, config: StrategyConfig, strategy_version=STRATEGY_VERSION):  
     df = df.sort_values('Date').dropna().reset_index(drop=True)
-    df = calculate_indicator(df)
-    df = generate_signal(df)
-    trades, df, active_setup_info = simulate_trade(df, ticker, strategy_version)
+    df = calculate_indicator(df, config)
+    df = generate_signal(df, config)
+    trades, df, active_setup_info = simulate_trade(df, ticker, config, strategy_version)
     return trades, df, active_setup_info
 
 # ==============================
@@ -355,7 +365,6 @@ def sync_daily_data(db_name=DB_NAME):
 
             end_date = (today + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
             
-            # yfinance 取資料
             raw_data = yf.download(tw50_tickers, start=start_date, end=end_date, group_by='ticker', progress=False, threads=False)
 
             all_records = []
@@ -400,7 +409,7 @@ def sync_daily_data(db_name=DB_NAME):
 # ==============================
 # Prt.05 總體績效結算模組
 # ==============================
-def generate_performance_report(version, db_name=DB_NAME):
+def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME):
     try:
         with sqlite3.connect(db_name) as conn:
             df = pd.read_sql_query(
@@ -425,8 +434,8 @@ def generate_performance_report(version, db_name=DB_NAME):
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # --- 🎯 已實現交易淨值 (Sequential Trade Equity) ---
-        weight_per_trade = 0.10
+        # --- 🎯 資金組合權重由 Config 動態注入 ---
+        weight_per_trade = config.capital_weight_per_trade
         
         df['exit_date'] = pd.to_datetime(df['exit_date'])
         df['realized_pnl'] = df['profit_pct'] * weight_per_trade
@@ -454,7 +463,7 @@ def generate_performance_report(version, db_name=DB_NAME):
             f"• 期望值 (Expectancy): {expectancy*100:.2f}%\n"
             f"• 年化報酬 (CAGR): {cagr:.1f}%\n"
             f"• 系統最大回撤 (Max DD): {sys_mdd:.1f}%\n"
-            f"<i>*註: 採用 Sequential Trade Equity 算法，假設每筆訊號固定投入 10% 資金，依出場日結算已實現損益。</i>"
+            f"<i>*註: 採用 Sequential Trade Equity 算法，依據設定每筆固定投入 {weight_per_trade*100:.0f}% 資金計算。</i>"
         )
         return report
     except sqlite3.Error as db_e:
@@ -468,13 +477,13 @@ def generate_performance_report(version, db_name=DB_NAME):
 def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
     logging.info("啟動 TW50 掃描與回測...")
 
+    config = StrategyConfig()
     alerts_setup = []
     alerts_trigger = []
 
     try:
         with sqlite3.connect(db_name) as conn:
             cursor = conn.cursor()
-            # 確保交易單一來源與防止重複寫入
             cursor.execute("DELETE FROM backtest_trades WHERE version = ?", (version,))
 
             for ticker in tw50_tickers:
@@ -490,7 +499,7 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
                     df_ticker = pd.DataFrame(rows, columns=['Date', 'Open', 'High', 'Low', 'Close', 'Volume'])
                     df_ticker['Date'] = pd.to_datetime(df_ticker['Date'])
                     
-                    all_trades, df_processed, active_setup_info = calculate_strategy(df_ticker, ticker, version)
+                    all_trades, df_processed, active_setup_info = calculate_strategy(df_ticker, ticker, config, version)
                     
                     if active_setup_info:
                         alerts_setup.append(
@@ -498,8 +507,9 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
                         )
                     
                     if all_trades:
+                        # 🎯 使用 INSERT OR REPLACE 配合 Unique Index 杜絕重複資料
                         cursor.executemany('''
-                            INSERT INTO backtest_trades (
+                            INSERT OR REPLACE INTO backtest_trades (
                                 version, ticker, entry_date, exit_date, entry_price, exit_price, 
                                 profit_pct, holding_bars, max_profit_pct, trade_max_drawdown_pct, entry_score
                             )
@@ -521,8 +531,7 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
         logging.error(error_message)
         alerts_trigger.append(f"⚠️ <b>系統嚴重錯誤</b>\n{error_message}")
 
-    # 組裝與發送 Telegram 報告
-    perf_report = generate_performance_report(version, db_name)
+    perf_report = generate_performance_report(version, config, db_name)
     final_message = build_telegram_report(version, alerts_setup, alerts_trigger, perf_report)
     send_telegram_alert(final_message)
 
