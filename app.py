@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.15 (引入 Showmethemoney 頂級側邊欄深色視覺與佈局)
+# 程式版本 : v03.16 (修正側邊欄面板標題、白色框線與收折箭頭顏色)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.15"
+APP_VERSION = "v03.16"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -101,12 +101,23 @@ html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !impo
 /* 🟢 完美移植 Showmethemoney 側邊欄容器視覺設計 */
 [data-testid="stVerticalBlockBorderWrapper"] { 
     background-color: #1e293b !important; 
-    border: 1px solid #94a3b8 !important; 
+    border: 1px solid #ffffff !important; /* 🌟 修正: 白色框線 */
     border-radius: 12px !important; 
     padding: 15px !important; 
     margin-bottom: 10px !important; 
 }
-[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
+
+/* 🌟 修正: 確保所有狀態下的收折箭頭與按鈕圖示都是純白色 */
+[data-testid="collapsedControl"] svg, 
+[data-testid="stSidebarCollapseButton"] svg, 
+button[kind="header"] svg,
+button[title="Collapse sidebar"] svg, 
+button[title="Expand sidebar"] svg { 
+    color: #ffffff !important; 
+    fill: #ffffff !important; 
+    stroke: #ffffff !important;
+}
+
 .stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
 .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
@@ -363,7 +374,12 @@ def main():
     # 🌟 側邊欄優化區塊 (無縫導入 Showmethemoney UI 架構)
     # ==============================
     with st.sidebar:
-        # 1. 新增監測股票 (保留 TW50 原有邏輯)
+        
+        # 🌟 修正 1: 補回遺失的控制面板標題區塊
+        with st.container(border=True):
+            st.markdown("### ⚙️ 控制與設定面板")
+            
+        # 1. 新增監測股票
         with st.container(border=True):
             st.markdown("### ➕ 新增監測股票")
             with st.form("add_tk"):
@@ -375,7 +391,7 @@ def main():
                         st.session_state.custom_watch.append(nt.upper())
                     safe_rerun()
 
-        # 2. 移除監測清單 (截圖 UI 移植，綁定 TW50 原有清單刪除邏輯)
+        # 2. 移除監測清單
         with st.container(border=True):
             st.markdown("### 🗑️ 移除監測清單")
             if 'custom_watch' in st.session_state and st.session_state.custom_watch:
@@ -387,7 +403,7 @@ def main():
                 st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True)
                 st.button("確認刪除", use_container_width=True, disabled=True)
 
-        # 3. 網頁刷新頻率 (截圖 UI 移植，控制底層 st_autorefresh)
+        # 3. 網頁刷新頻率
         with st.container(border=True):
             st.markdown("### ⏱️ 網頁刷新頻率")
             refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
@@ -395,7 +411,7 @@ def main():
                 st.cache_data.clear()
                 safe_rerun()
                 
-        # 4. 手動測試推播 (截圖 UI 移植，包裝 TW50 原有的手動回測邏輯)
+        # 4. 手動測試推播
         with st.container(border=True):
             st.markdown("### 🛠️ 手動測試推播")
             if st.button("發送目前小卡狀態", use_container_width=True):
@@ -431,7 +447,7 @@ def main():
                     else:
                         st.error(f"❌ 發送失敗：{error_reason}")
 
-        # 5. 系統狀態與版本 (截圖 UI 移植，Showmethemoney 深色置中資訊卡)
+        # 5. 系統狀態與版本
         st.markdown(
             f"""
             <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
