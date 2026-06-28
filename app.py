@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.21 (100% 絕對複製 Showmethemoney 樣板 CSS)
+# 程式版本 : v03.22 (修正側邊欄系統狀態區塊的框線顏色，完美對齊樣板)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.21"
+APP_VERSION = "v03.22"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -424,7 +424,7 @@ def main():
         # 6. 系統狀態與版本
         st.markdown(
             f"""
-            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #ffffff; text-align:center; margin-top:15px; margin-bottom:15px;">
+            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
                 <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">核心策略版本</div>
