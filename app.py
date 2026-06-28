@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.17 (100% 精準移植 Showmethemoney 視覺 CSS 與容器架構)
+# 程式版本 : v03.18 (強制 CSS 覆寫：修復側邊欄白色框線與純白收折箭頭)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.17"
+APP_VERSION = "v03.18"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -86,7 +86,7 @@ def send_telegram_alert(message):
 
 # ==============================
 # Prt.02 頂級深色優化視覺 CSS 
-# (完全 100% 複製 Showmethemoney_app_v2.1h.py 原始 CSS 確保白色框線與箭頭)
+# (暴力修正版：確保白色框線與箭頭絕對生效)
 # ==============================
 st.markdown(r'''
 <style>
@@ -99,9 +99,25 @@ h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-/* 🌟 下方這段是維持框線與白色箭頭的核心 (原汁原味 Showmethemoney 碼) */
-[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #94a3b8 !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
-[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
+/* 🌟 1. 強制功能區塊為白色框線 (提高層級到 div) */
+div[data-testid="stVerticalBlockBorderWrapper"] { 
+    background-color: #1e293b !important; 
+    border: 1px solid #ffffff !important; 
+    border-radius: 12px !important; 
+    padding: 15px !important; 
+    margin-bottom: 10px !important; 
+}
+
+/* 🌟 2. 強制收折箭頭為純白色 (覆蓋 fill 與 stroke) */
+[data-testid="stSidebar"] svg, 
+[data-testid="collapsedControl"] svg, 
+[data-testid="stSidebarCollapseButton"] svg, 
+button[kind="header"] svg { 
+    color: #ffffff !important; 
+    fill: #ffffff !important; 
+    stroke: #ffffff !important; 
+}
+
 .stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
 .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
@@ -111,7 +127,7 @@ div[role="radiogroup"] label { color: #f1f5f9 !important; font-weight: 600 !impo
 .stButton > button { background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; }
 .stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
 
-/* 🌟 TW50 專用卡片排版樣式 (無改動功能，僅呈現) */
+/* TW50 專用卡片排版樣式 */
 h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
 .flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
 .stock-compact-card { background-color: #171a23; border: 1px solid #2d3748; border-radius: 12px; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; }
@@ -347,11 +363,11 @@ def main():
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
     # ==============================
-    # 🌟 側邊欄優化區塊 (嚴格還原 Showmethemoney 獨立區塊架構)
+    # 🌟 側邊欄優化區塊
     # ==============================
     with st.sidebar:
         
-        # 1. 控制與設定面板 (還原為獨立的、最上方的空殼區塊)
+        # 1. 控制與設定面板
         with st.container(border=True):
             st.markdown("### ⚙️ 控制與設定面板")
 
@@ -379,7 +395,7 @@ def main():
                 st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True)
                 st.button("確認刪除", use_container_width=True, disabled=True)
 
-        # 4. 網頁刷新頻率 (還原為獨立區塊)
+        # 4. 網頁刷新頻率
         with st.container(border=True):
             st.markdown("### ⏱️ 網頁刷新頻率")
             refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
@@ -387,7 +403,7 @@ def main():
                 st.cache_data.clear()
                 safe_rerun()
                 
-        # 5. 手動測試推播 (還原為獨立區塊)
+        # 5. 手動測試推播
         with st.container(border=True):
             st.markdown("### 🛠️ 手動測試推播")
             if st.button("發送目前小卡狀態", use_container_width=True):
@@ -423,10 +439,10 @@ def main():
                     else:
                         st.error(f"❌ 發送失敗：{error_reason}")
 
-        # 6. 系統狀態與版本 (完全依照 Showmethemoney_app_v2.1h.py 的深色底框風格)
+        # 6. 系統狀態與版本
         st.markdown(
             f"""
-            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
+            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #ffffff; text-align:center; margin-top:15px; margin-bottom:15px;">
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
                 <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">核心策略版本</div>
