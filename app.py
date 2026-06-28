@@ -1,8 +1,8 @@
 # ==========================================================
-# ⭐⭐⭐⭐⭐⭐⭐⭐⭐•
+# ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.14 (完全對齊後台 v02.23 參數解耦與 ATR 停損模組)
+# 程式版本 : v03.15 (引入 Showmethemoney 頂級側邊欄深色視覺與佈局)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.14"
+APP_VERSION = "v03.15"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -85,7 +85,7 @@ def send_telegram_alert(message):
         return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
-# Prt.02 頂級深色優化視覺 CSS (側邊欄白色框線版)
+# Prt.02 頂級深色優化視覺 CSS (導入 Showmethemoney 側邊欄風格)
 # ==============================
 st.markdown(r'''
 <style>
@@ -98,31 +98,24 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-/* 1 & 3. 側邊欄常規功能區塊：改為白色框線 */
-[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] { 
-    background-color: #171a23 !important; 
-    border: 1px solid #ffffff !important; 
+/* 🟢 完美移植 Showmethemoney 側邊欄容器視覺設計 */
+[data-testid="stVerticalBlockBorderWrapper"] { 
+    background-color: #1e293b !important; 
+    border: 1px solid #94a3b8 !important; 
     border-radius: 12px !important; 
     padding: 15px !important; 
-    margin-bottom: 15px !important; 
+    margin-bottom: 10px !important; 
 }
-
-/* 2. 左下角獨立功能區塊：灰色底、白色框線 */
-.sidebar-bottom-block {
-    background-color: #2d3748 !important; 
-    border: 1px solid #ffffff !important; 
-    border-radius: 12px !important; 
-    padding: 15px !important; 
-    margin-top: 40px !important; 
-}
-
-.stTextInput div[data-baseweb="input"] { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important; }
+[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
+.stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
+.stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
 [data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
+[data-testid="stWidgetLabel"] p, div[data-testid="stMarkdownContainer"] p, .stSlider label { color: #cbd5e1 !important; font-weight: 600 !important; font-size: 0.95rem !important; }
 .stButton > button { background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; }
 .stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
 
-/* 網格與卡片設計 */
+/* 網格與卡片設計 (保留 TW50 的卡片樣式) */
 .flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
 .stock-compact-card { background-color: #171a23; border: 1px solid #2d3748; border-radius: 12px; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; transition: transform 0.2s, border-color 0.2s; }
 .stock-compact-card:hover { transform: translateY(-3px); border-color: #3b82f6; }
@@ -184,7 +177,7 @@ def fetch_custom_stock(ticker):
     except: return None
 
 # ==============================
-# Prt.04 核心儀表板指標與評分模組 (取代舊的 calculate_v0212_score)
+# Prt.04 核心儀表板指標與評分模組
 # ==============================
 def calculate_dashboard_metrics(df_stock, config: StrategyConfig):
     df = df_stock.dropna(subset=['Close']).sort_values('Date').copy()
@@ -259,7 +252,7 @@ def calculate_dashboard_metrics(df_stock, config: StrategyConfig):
     return res
 
 # ==============================
-# Prt.05 總體績效結算模組 (對齊 main.py StrategyConfig 注入)
+# Prt.05 總體績效結算模組
 # ==============================
 def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME):
     try:
@@ -286,7 +279,6 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
         avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
         expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
         
-        # 資金組合權重由 Config 動態注入
         weight_per_trade = config.capital_weight_per_trade
         
         df['exit_date'] = pd.to_datetime(df['exit_date'])
@@ -328,11 +320,8 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
 # ==============================
 def main():
     st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
-    st_autorefresh(interval=60 * 1000, key="refresh")
     
-    # 實例化策略配置參數
     config = StrategyConfig()
-    
     df_raw, status_msg = load_csv_data()
     
     date_range_str = "2021/06/25 ~ 2026/06/24"
@@ -361,7 +350,6 @@ def main():
         if pd.isna(tk): continue 
         try:
             df_tk = combined_df[combined_df['ticker'] == tk]
-            # 傳入 Config 計算指標與分數
             data = calculate_dashboard_metrics(df_tk, config)
             if data:
                 data['ticker'] = tk
@@ -371,18 +359,46 @@ def main():
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
-    # --- 側邊欄優化區塊 ---
+    # ==============================
+    # 🌟 側邊欄優化區塊 (無縫導入 Showmethemoney UI 架構)
+    # ==============================
     with st.sidebar:
-        # 1. 控制與設定面板 (白色框線)
+        # 1. 新增監測股票 (保留 TW50 原有邏輯)
         with st.container(border=True):
-            st.markdown("### ⚙️ 控制與設定面板")
-            
-            if st.button("🔄 刷新數據", use_container_width=True): 
+            st.markdown("### ➕ 新增監測股票")
+            with st.form("add_tk"):
+                nt = st.text_input("輸入代號 (例: 2330.TW)", label_visibility="collapsed")
+                if st.form_submit_button("➕ 確認輸入", use_container_width=True) and nt:
+                    if 'custom_watch' not in st.session_state: 
+                        st.session_state.custom_watch = []
+                    if nt.upper() not in st.session_state.custom_watch:
+                        st.session_state.custom_watch.append(nt.upper())
+                    safe_rerun()
+
+        # 2. 移除監測清單 (截圖 UI 移植，綁定 TW50 原有清單刪除邏輯)
+        with st.container(border=True):
+            st.markdown("### 🗑️ 移除監測清單")
+            if 'custom_watch' in st.session_state and st.session_state.custom_watch:
+                del_sym = st.selectbox("刪除目標", ["--- 請選擇 ---"] + st.session_state.custom_watch)
+                if st.button("確認刪除", use_container_width=True) and del_sym != "--- 請選擇 ---":
+                    st.session_state.custom_watch.remove(del_sym)
+                    safe_rerun()
+            else:
+                st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True)
+                st.button("確認刪除", use_container_width=True, disabled=True)
+
+        # 3. 網頁刷新頻率 (截圖 UI 移植，控制底層 st_autorefresh)
+        with st.container(border=True):
+            st.markdown("### ⏱️ 網頁刷新頻率")
+            refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
+            if st.button("🔄 手動立即刷新", use_container_width=True):
                 st.cache_data.clear()
                 safe_rerun()
                 
-            # 🎯 執行手動回測 (綁定 Config 與 STRATEGY_VERSION)
-            if st.button("▶️ 手動回測", use_container_width=True):
+        # 4. 手動測試推播 (截圖 UI 移植，包裝 TW50 原有的手動回測邏輯)
+        with st.container(border=True):
+            st.markdown("### 🛠️ 手動測試推播")
+            if st.button("發送目前小卡狀態", use_container_width=True):
                 with st.spinner("🚀 正在執行判定與通報..."):
                     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
                     msg = f"📊 <b>{STRATEGY_VERSION} 台股 50 戰情室 (手動健康檢查)</b>\n"
@@ -415,29 +431,19 @@ def main():
                     else:
                         st.error(f"❌ 發送失敗：{error_reason}")
 
-        # 3. 新增監控 (白色框線)
-        with st.container(border=True):
-            st.markdown("### ➕ 新增監控")
-            with st.form("add_tk"):
-                nt = st.text_input("輸入代號 (例: 2330.TW)", label_visibility="collapsed")
-                if st.form_submit_button("➕ 加入監控", use_container_width=True) and nt:
-                    if 'custom_watch' not in st.session_state: 
-                        st.session_state.custom_watch = []
-                    if nt.upper() not in st.session_state.custom_watch:
-                        st.session_state.custom_watch.append(nt.upper())
-                    safe_rerun()
-
-        # 2. 版本與歷史區間移至左下角 (顯示雙版本狀態)
-        st.markdown(f'''
-        <div class="sidebar-bottom-block">
-            <div style="font-weight: 700; color: #ffffff; margin-bottom: 6px; font-size: 0.95rem;">ℹ️ 系統狀態</div>
-            <div style="color: #e2e8f0; font-size: 0.82rem;">UI 版本: {APP_VERSION}</div>
-            <div style="color: #e2e8f0; font-size: 0.82rem;">核心策略: {STRATEGY_VERSION}</div>
-            <div style="color: #e2e8f0; font-size: 0.82rem; margin-top: 4px; line-height: 1.4;">
-                🕒 歷史資料區間:<br><span style="font-family: monospace;">{date_range_str}</span>
+        # 5. 系統狀態與版本 (截圖 UI 移植，Showmethemoney 深色置中資訊卡)
+        st.markdown(
+            f"""
+            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
+                <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
+                <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
+                <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">核心策略版本</div>
+                <div style="color:#e2e8f0; font-size: 0.88rem; font-weight:600; margin-bottom:10px;">{STRATEGY_VERSION}</div>
+                <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:8px;">🕒 歷史資料區間</div>
+                <div style="color:#f1f5f9; font-size:0.75rem; font-weight:600; margin-bottom:2px; font-family: monospace;">{date_range_str}</div>
             </div>
-        </div>
-        ''', unsafe_allow_html=True)
+            """, unsafe_allow_html=True
+        )
 
     # 畫面渲染：主要資料大廳
     html_cards = '<div class="flex-matrix-container">'
@@ -453,7 +459,7 @@ def main():
         # 判斷多頭動能
         rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
         
-        # 🎯 升級 UI 小卡，加入動態 ATR 停損與風險估算
+        # 🎯 動態 ATR 停損與風險估算
         if score >= config.setup_score_threshold:
             stop_tgt = high_today - (config.atr_multiplier * atr)
             risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
@@ -488,6 +494,9 @@ def main():
         
     html_cards += '</div>'
     st.markdown(html_cards, unsafe_allow_html=True)
+    
+    # 動態綁定側邊欄拉桿的刷新頻率
+    st_autorefresh(interval=refresh_sec * 1000, key="stock_refresh")
 
 if __name__ == "__main__":
     main()
