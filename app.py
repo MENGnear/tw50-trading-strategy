@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.16 (修正側邊欄面板標題、白色框線與收折箭頭顏色)
+# 程式版本 : v03.16 (精準對齊 Showmethemoney 白色框線、白色箭頭與控制面板)
 # ==========================================================
 
 import streamlit as st
@@ -98,24 +98,23 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-/* 🟢 完美移植 Showmethemoney 側邊欄容器視覺設計 */
+/* 🟢 完美對齊 Showmethemoney 側邊欄功能區塊：使用純白色框線 */
 [data-testid="stVerticalBlockBorderWrapper"] { 
     background-color: #1e293b !important; 
-    border: 1px solid #ffffff !important; /* 🌟 修正: 白色框線 */
+    border: 1px solid #ffffff !important; 
     border-radius: 12px !important; 
     padding: 15px !important; 
     margin-bottom: 10px !important; 
 }
 
-/* 🌟 修正: 確保所有狀態下的收折箭頭與按鈕圖示都是純白色 */
+/* 🟢 強制讓側邊欄收折與展開箭頭完全呈現明亮白色 */
 [data-testid="collapsedControl"] svg, 
 [data-testid="stSidebarCollapseButton"] svg, 
 button[kind="header"] svg,
-button[title="Collapse sidebar"] svg, 
-button[title="Expand sidebar"] svg { 
+[data-testid="stSidebar"] button svg,
+.st-emotion-cache-16ids6e svg { 
     color: #ffffff !important; 
     fill: #ffffff !important; 
-    stroke: #ffffff !important;
 }
 
 .stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
@@ -286,9 +285,9 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
         gross_loss = abs(loss_trades['profit_pct'].sum())
         profit_factor = (gross_profit / gross_loss) if gross_loss != 0 else float('inf')
         
-        avg_win = win_trades['profit_pct'].mean() if not win_trades.empty else 0
-        avg_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
-        expectancy = (avg_win * (len(win_trades) / total_trades)) + (avg_loss * (len(loss_trades) / total_trades))
+        example_win = win_trades['profit_pct'].mean() if not win_trades.empty else 0
+        example_loss = loss_trades['profit_pct'].mean() if not loss_trades.empty else 0
+        expectancy = (example_win * (len(win_trades) / total_trades)) + (example_loss * (len(loss_trades) / total_trades))
         
         weight_per_trade = config.capital_weight_per_trade
         
@@ -371,14 +370,9 @@ def main():
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
     # ==============================
-    # 🌟 側邊欄優化區塊 (無縫導入 Showmethemoney UI 架構)
+    # 🌟 側邊欄優化區塊 (精準對齊 Showmethemoney UI 架構)
     # ==============================
     with st.sidebar:
-        
-        # 🌟 修正 1: 補回遺失的控制面板標題區塊
-        with st.container(border=True):
-            st.markdown("### ⚙️ 控制與設定面板")
-            
         # 1. 新增監測股票
         with st.container(border=True):
             st.markdown("### ➕ 新增監測股票")
@@ -403,9 +397,10 @@ def main():
                 st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True)
                 st.button("確認刪除", use_container_width=True, disabled=True)
 
-        # 3. 網頁刷新頻率
+        # 3. ⚙️ 控制與設定面板 (完美回歸：融合重新整理頻率與手動刷新按鈕)
         with st.container(border=True):
-            st.markdown("### ⏱️ 網頁刷新頻率")
+            st.markdown("### ⚙️ 控制與設定面板")
+            st.markdown("<p style='font-size:0.95rem; font-weight:600; color:#cbd5e1; margin-bottom:4px;'>⏱️ 網頁刷新頻率</p>", unsafe_allow_html=True)
             refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
             if st.button("🔄 手動立即刷新", use_container_width=True):
                 st.cache_data.clear()
@@ -450,7 +445,7 @@ def main():
         # 5. 系統狀態與版本
         st.markdown(
             f"""
-            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
+            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #ffffff; text-align:center; margin-top:15px; margin-bottom:15px;">
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
                 <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">核心策略版本</div>
