@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.23 (強制鎖定白色框線與 SVG 箭頭 stroke 上色)
+# 程式版本 : v03.24 (100% 退回 Showmethemoney 樣板原生 CSS)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.23"
+APP_VERSION = "v03.24"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -98,8 +98,8 @@ h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px
 html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
 [data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #ffffff !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
-[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; stroke: #ffffff !important; }
+[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #94a3b8 !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
+[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
 .stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
 .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
@@ -424,7 +424,7 @@ def main():
         # 6. 系統狀態與版本
         st.markdown(
             f"""
-            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #ffffff; text-align:center; margin-top:15px; margin-bottom:15px;">
+            <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
                 <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
                 <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">核心策略版本</div>
