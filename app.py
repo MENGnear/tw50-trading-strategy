@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : TW50_V3.28 (完整移植 MON_V3.0.1 視覺系統與結構)
+# 程式版本 : TW50_V3.29 (100% 對齊 MON_V3.0.1 的 CSS 與細膩 Inline 佈局)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "TW50_V3.28"
+APP_VERSION = "TW50_V3.29"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -87,7 +87,7 @@ def send_telegram_alert(message):
         return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
-# Prt.02 頂級深色優化視覺 CSS (100% 移植 MON_V3.0.1)
+# Prt.02 頂級深色優化視覺 CSS (100% 複製自 MON_V3.0.1)
 # ==============================
 st.markdown(r'''
 <style>
@@ -368,7 +368,7 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
         return f"================\n⚠️ 績效統計發生未預期錯誤: {e}"
 
 # ==============================
-# Prt.06 主程式與渲染大廳 (平坦執行結構)
+# Prt.06 主程式與渲染大廳
 # ==============================
 st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
 
@@ -409,7 +409,7 @@ else:
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
 
     # ==============================
-    # 🌟 側邊欄優化區塊
+    # 🌟 側邊欄優化區塊 (對齊 MON_V3.0.1 格式)
     # ==============================
     with st.sidebar:
         
@@ -417,11 +417,12 @@ else:
         with st.container(border=True):
             st.markdown("### ⚙️ 控制與設定面板")
 
-        # 2. 新增監測股票 (修正為無 form 寫法)
+        # 2. 新增監測股票 (套用亮藍色標題與 Inline 樣式)
         with st.container(border=True):
             st.markdown("### ➕ 新增監測股票")
+            st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>✍️ 手動輸入代號</div>", unsafe_allow_html=True)
             nt = st.text_input("輸入代號 (例: 2330.TW)", label_visibility="collapsed")
-            if st.button("➕ 確認輸入", use_container_width=True) and nt:
+            if st.button("確認輸入", use_container_width=True) and nt:
                 if 'custom_watch' not in st.session_state: 
                     st.session_state.custom_watch = []
                 if nt.upper() not in st.session_state.custom_watch:
@@ -431,18 +432,20 @@ else:
         # 3. 移除監測清單
         with st.container(border=True):
             st.markdown("### 🗑️ 移除監測清單")
+            st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>🎯 選擇刪除目標</div>", unsafe_allow_html=True)
             if 'custom_watch' in st.session_state and st.session_state.custom_watch:
-                del_sym = st.selectbox("刪除目標", ["--- 請選擇 ---"] + st.session_state.custom_watch)
+                del_sym = st.selectbox("刪除目標", ["--- 請選擇 ---"] + st.session_state.custom_watch, label_visibility="collapsed")
                 if st.button("確認刪除", use_container_width=True) and del_sym != "--- 請選擇 ---":
                     st.session_state.custom_watch.remove(del_sym)
                     safe_rerun()
             else:
-                st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True)
+                st.selectbox("刪除目標", ["--- 請選擇 ---"], disabled=True, label_visibility="collapsed")
                 st.button("確認刪除", use_container_width=True, disabled=True)
 
         # 4. 網頁刷新頻率
         with st.container(border=True):
             st.markdown("### ⏱️ 網頁刷新頻率")
+            st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>秒數設定</div>", unsafe_allow_html=True)
             refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
             if st.button("🔄 手動立即刷新", use_container_width=True):
                 st.cache_data.clear()
@@ -451,6 +454,7 @@ else:
         # 5. 手動測試推播
         with st.container(border=True):
             st.markdown("### 🛠️ 手動測試推播")
+            st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>發送即時狀態</div>", unsafe_allow_html=True)
             if st.button("發送目前小卡狀態", use_container_width=True):
                 with st.spinner("🚀 正在執行判定與通報..."):
                     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
@@ -519,23 +523,23 @@ else:
         else:
             action_html = f'<div class="custom-alert-box action-wait">⏳ 觀察多頭動能續航</div>'
 
-        # 組裝 HTML 小卡
+        # 組裝 HTML 小卡 (對齊 card-middle-layout 等格式)
         card = (
             f'<div class="stock-compact-card">'
             f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
             f'<div class="card-price-txt">{price_str}</div>'
             f'<div class="card-middle-layout">'
             f'<div class="layout-left-col">'
-            f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
-            f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
-            f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
-            f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
-            f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
+            f'<span class="txt-label">MACD:</span> <span class="txt-bold-val">{d["s1"]}</span><br>'
+            f'<span class="txt-label">MA20:</span> <span class="txt-bold-val">{d["s2"]}</span><br>'
+            f'<span class="txt-label">斜率:</span> <span class="txt-bold-val">{d["s3"]}</span><br>'
+            f'<span class="txt-label">趨勢:</span> <span class="txt-bold-val">{d["s4"]}</span><br>'
+            f'<span class="txt-label">量能:</span> <span class="txt-bold-val">{d["s5"]}</span>'
             f'</div>'
             f'<div class="layout-right-col">'
-            f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
+            f'<span class="txt-label-rsi">R6:</span> <span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
+            f'<span class="txt-label-rsi">R14:</span> <span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
+            f'<span class="txt-label-rsi">R24:</span> <span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
             f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
             f'</div>'
             f'</div>'
