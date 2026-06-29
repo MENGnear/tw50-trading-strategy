@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : v03.26 (拆除 form 結構地雷解決雙重框線，全域 SVG 箭頭鎖白)
+# 程式版本 : TW50_V3.28 (完整移植 MON_V3.0.1 視覺系統與結構)
 # ==========================================================
 
 import streamlit as st
@@ -29,7 +29,7 @@ st.set_page_config(
 # ==============================
 # Prt.00 全域常數與設定 (對齊後台 main.py)
 # ==============================
-APP_VERSION = "v03.26"
+APP_VERSION = "TW50_V3.28"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -48,6 +48,8 @@ class StrategyConfig:
     setup_score_threshold: int = 45
     max_setup_days: int = 5
     capital_weight_per_trade: float = 0.10
+
+config = StrategyConfig()
 
 # --- 相容性 Rerun 處理 ---
 def safe_rerun():
@@ -85,45 +87,109 @@ def send_telegram_alert(message):
         return False, f"Telegram API 拒絕請求: {e}"
 
 # ==============================
-# Prt.02 頂級深色優化視覺 CSS 
+# Prt.02 頂級深色優化視覺 CSS (100% 移植 MON_V3.0.1)
 # ==============================
 st.markdown(r'''
 <style>
+/* =========================================
+   1. 全域與基礎設定 (字體與網頁背景)
+   ========================================= */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-serif !important; }
+html, body, [data-testid="stAppViewContainer"] { 
+    font-family: 'Inter', sans-serif !important; 
+    background-color: #0e1117 !important; /* 全域深黑底色 */
+    color: #f1f5f9 !important; /* 基礎文字灰白 */
+}
 [data-testid="stActionElements"] { display: none !important; }
 header[data-testid="stHeader"] { background-color: transparent !important; }
 .main .block-container { padding-top: 1.5rem !important; margin-top: -30px !important; }
 h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px !important; }
-html, body, [data-testid="stAppViewContainer"] { background-color: #0e1117 !important; color: #f1f5f9 !important; }
-[data-testid="stSidebar"] { background-color: #171a23 !important; border-right: 1px solid #2d3748 !important; }
 
-[data-testid="stVerticalBlockBorderWrapper"] { background-color: #1e293b !important; border: 1px solid #94a3b8 !important; border-radius: 12px !important; padding: 15px !important; margin-bottom: 10px !important; }
-[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { color: #ffffff !important; fill: #ffffff !important; }
-[data-testid="stSidebar"] svg { fill: #ffffff !important; color: #ffffff !important; }
-.stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { background-color: #0f172a !important; border: 1px solid #475569 !important; border-radius: 8px !important;  }
+/* =========================================
+   2. 側邊欄與元件視覺 (輸入框、選單、按鈕)
+   ========================================= */
+[data-testid="stSidebar"] { 
+    background-color: #171a23 !important; /* 側邊欄稍淺的深黑 */
+    border-right: 1px solid #2d3748 !important; 
+}
+[data-testid="stVerticalBlockBorderWrapper"] { 
+    background-color: #1e293b !important; /* 側邊欄容器底色 */
+    border: 1px solid #94a3b8 !important; 
+    border-radius: 12px !important; 
+    padding: 15px !important; 
+    margin-bottom: 10px !important; 
+}
+[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { 
+    color: #ffffff !important; fill: #ffffff !important; 
+}
+.stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { 
+    background-color: #0f172a !important; /* 輸入框深藍黑底色 */
+    border: 1px solid #475569 !important; 
+    border-radius: 8px !important;  
+}
 .stTextInput input { color: #ffffff !important; background-color: transparent !important; }
 .stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
 [data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
 [data-testid="stWidgetLabel"] p, div[data-testid="stMarkdownContainer"] p, .stSlider label { color: #cbd5e1 !important; font-weight: 600 !important; font-size: 0.95rem !important; }
 div[role="radiogroup"] label { color: #f1f5f9 !important; font-weight: 600 !important; }
-.stButton > button { background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; }
+
+/* 按鈕：漸層藍色與 Hover 效果 */
+.stButton > button { 
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; 
+    color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; 
+}
 .stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
 
-/* TW50 專用卡片排版樣式 */
-h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
+/* =========================================
+   3. 矩陣排版與個股卡片基礎外觀
+   ========================================= */
+.section-title { font-size: 1.3rem; font-weight: 700; color: #f8fafc; margin: 15px 0 10px 0; padding-left: 8px; border-left: 4px solid #3b82f6; }
 .flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
-.stock-compact-card { background-color: #171a23; border: 1px solid #2d3748; border-radius: 12px; padding: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; }
-.card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; display: flex; justify-content: space-between; align-items: baseline; }
-.card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; }
-.score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
+.stock-compact-card { 
+    background-color: #171a23; 
+    border: 1px solid #2d3748; 
+    border-radius: 12px; padding: 16px; 
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); 
+    width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; 
+}
+
+/* =========================================
+   4. 台美股專屬漲跌色 (台股紅漲綠跌 / 美股綠漲紅跌)
+   ========================================= */
+/* 台股上漲：紅色背景與邊框 (rgba 透明度控制) */
+.card-tw-up { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
+/* 台股下跌：綠色背景與邊框 */
+.card-tw-down { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
+/* 美股上漲：綠色背景與邊框 */
+.card-us-up { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
+/* 美股下跌：紅色背景與邊框 */
+.card-us-down { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
+
+/* 警示條樣式：對應上述配色 */
+.alert-tw-up { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
+.alert-tw-down { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
+.alert-us-up { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
+.alert-us-down { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
+
+/* =========================================
+   5. 字體與排版細節 (標題、價格、資訊區)
+   ========================================= */
+.card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; } /* 價格：亮藍色 */
 .card-middle-layout { display: flex; justify-content: space-between; margin-bottom: 4px; }
 .layout-left-col { flex: 1.1; border-right: 1px dashed #2d3748; padding-right: 4px; text-align: left !important; line-height: 1.7; }
 .layout-right-col { flex: 0.9; text-align: left !important; padding-left: 12px; line-height: 1.7; }
-.txt-label { color: #94a3b8; font-size: 0.82rem; white-space: nowrap; }
-.txt-label-rsi { color: #a78bfa; font-size: 0.82rem; white-space: nowrap; }
+.txt-label { color: #94a3b8; font-size: 0.82rem; white-space: nowrap; } /* 灰色小標籤 */
+.txt-label-rsi { color: #a78bfa; font-size: 0.82rem; white-space: nowrap; } /* RSI標籤：淺紫色 */
 .txt-bold-val { color: #f1f5f9; font-size: 0.82rem; font-weight: 600; }
 .custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
+.alert-empty { background-color: transparent; color: transparent; }
+
+/* =========================================
+   6. TW50 專屬卡片排版樣式
+   ========================================= */
+h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
+.score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
 .action-buy { color: #f2cc60; background-color: rgba(242, 204, 96, 0.15) !important; border: 1px dashed #f2cc60; }
 .action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; }
 </style>
@@ -302,33 +368,30 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
         return f"================\n⚠️ 績效統計發生未預期錯誤: {e}"
 
 # ==============================
-# Prt.06 主程式與渲染大廳
+# Prt.06 主程式與渲染大廳 (平坦執行結構)
 # ==============================
-def main():
-    st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
-    
-    config = StrategyConfig()
-    df_raw, status_msg = load_csv_data()
-    
-    date_range_str = "2021/06/25 ~ 2026/06/24"
-    if not df_raw.empty and 'Date' in df_raw.columns:
-        valid_dates = df_raw['Date'].dropna()
-        if not valid_dates.empty:
-            min_date = valid_dates.min().strftime('%Y/%m/%d')
-            max_date = valid_dates.max().strftime('%Y/%m/%d')
-            date_range_str = f"{min_date} ~ {max_date}"
+st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
 
-    combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
-    if 'custom_watch' in st.session_state:
-        for ct in st.session_state.custom_watch:
-            cdf = fetch_custom_stock(ct)
-            if cdf is not None and not cdf.empty:
-                combined_df = pd.concat([combined_df, cdf], ignore_index=True)
+df_raw, status_msg = load_csv_data()
 
-    if combined_df.empty:
-        st.error(status_msg)
-        return
+date_range_str = "2021/06/25 ~ 2026/06/24"
+if not df_raw.empty and 'Date' in df_raw.columns:
+    valid_dates = df_raw['Date'].dropna()
+    if not valid_dates.empty:
+        min_date = valid_dates.min().strftime('%Y/%m/%d')
+        max_date = valid_dates.max().strftime('%Y/%m/%d')
+        date_range_str = f"{min_date} ~ {max_date}"
 
+combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
+if 'custom_watch' in st.session_state:
+    for ct in st.session_state.custom_watch:
+        cdf = fetch_custom_stock(ct)
+        if cdf is not None and not cdf.empty:
+            combined_df = pd.concat([combined_df, cdf], ignore_index=True)
+
+if combined_df.empty:
+    st.error(status_msg)
+else:
     display_list = []
     tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
     
@@ -354,7 +417,7 @@ def main():
         with st.container(border=True):
             st.markdown("### ⚙️ 控制與設定面板")
 
-        # 2. 新增監測股票 (修正 form 框架結構)
+        # 2. 新增監測股票 (修正為無 form 寫法)
         with st.container(border=True):
             st.markdown("### ➕ 新增監測股票")
             nt = st.text_input("輸入代號 (例: 2330.TW)", label_visibility="collapsed")
@@ -421,7 +484,7 @@ def main():
                     else:
                         st.error(f"❌ 發送失敗：{error_reason}")
 
-        # 6. 系統狀態與版本
+        # 6. 系統狀態與版本 (對齊 MON_V3.0.1)
         st.markdown(
             f"""
             <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
@@ -485,6 +548,3 @@ def main():
     st.markdown(html_cards, unsafe_allow_html=True)
     
     st_autorefresh(interval=refresh_sec * 1000, key="stock_refresh")
-
-if __name__ == "__main__":
-    main()
