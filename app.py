@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板 (UI 側邊欄優化版)
 # 檔案名稱 : app.py
-# 程式版本 : TW50_V3.30 (全結構與原生類別 100% 深度對齊 MON 樣板)
+# 程式版本 : TW50_V3.31 (強制突破 Autofill 白底與 CSS 權重問題)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
 
@@ -28,9 +28,115 @@ st.set_page_config(
 )
 
 # ==========================================================
+# 4️⃣ 🎨 頂級深色優化視覺 CSS (強制提升優先級 + 解決 Autofill)
+# ==========================================================
+# 將 CSS 移至最頂端，確保第一時間渲染
+st.markdown(r'''
+<style>
+/* =========================================
+   1. 全域與基礎設定 (字體與網頁背景)
+   ========================================= */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+html, body, [data-testid="stAppViewContainer"] { 
+    font-family: 'Inter', sans-serif !important; 
+    background-color: #0e1117 !important; 
+    color: #f1f5f9 !important; 
+}
+[data-testid="stActionElements"] { display: none !important; }
+header[data-testid="stHeader"] { background-color: transparent !important; }
+.main .block-container { padding-top: 1.5rem !important; margin-top: -30px !important; }
+h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px !important; }
+
+/* =========================================
+   2. 側邊欄與元件視覺 (加上 body 強制提升 CSS 權重，確保框線生效)
+   ========================================= */
+body [data-testid="stSidebar"] { 
+    background-color: #171a23 !important; 
+    border-right: 1px solid #2d3748 !important; 
+}
+/* 強制鎖定側邊欄容器的亮顯框線 */
+body [data-testid="stSidebar"] div[data-testid="stVerticalBlockBorderWrapper"] { 
+    background-color: #1e293b !important; 
+    border: 1px solid #94a3b8 !important; 
+    border-radius: 12px !important; 
+    padding: 15px !important; 
+    margin-bottom: 10px !important; 
+}
+[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { 
+    color: #ffffff !important; fill: #ffffff !important; 
+}
+
+/* 強制鎖定輸入框顏色 */
+body [data-testid="stSidebar"] .stTextInput div[data-baseweb="input"], 
+body [data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div { 
+    background-color: #0f172a !important; 
+    border: 1px solid #475569 !important; 
+    border-radius: 8px !important;  
+}
+body [data-testid="stSidebar"] .stTextInput input { 
+    color: #ffffff !important; 
+    background-color: transparent !important; 
+}
+.stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
+[data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
+[data-testid="stWidgetLabel"] p, div[data-testid="stMarkdownContainer"] p, .stSlider label { color: #cbd5e1 !important; font-weight: 600 !important; font-size: 0.95rem !important; }
+
+/* 🚀 終極解決瀏覽器 Autofill 自動變白的問題 */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+    -webkit-box-shadow: 0 0 0 30px #0f172a inset !important;
+    -webkit-text-fill-color: #ffffff !important;
+    transition: background-color 5000s ease-in-out 0s;
+}
+
+.stButton > button { 
+    background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; 
+    color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; 
+}
+.stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
+
+/* =========================================
+   3. 矩陣排版與個股卡片基礎外觀
+   ========================================= */
+.flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
+.stock-compact-card { 
+    background-color: #171a23; 
+    border: 1px solid #2d3748; 
+    border-radius: 12px; padding: 16px; 
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); 
+    width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; 
+}
+
+/* 直接套用 MON 樣板原生配色 */
+.card-tw-up { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
+.card-tw-down { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
+.alert-tw-up { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; }
+.alert-empty { background-color: transparent; color: transparent; min-height: 38px; }
+
+.card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; justify-content: space-between; align-items: baseline; }
+.card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; }
+.card-middle-layout { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.layout-left-col { flex: 1.1; border-right: 1px dashed #2d3748; padding-right: 4px; text-align: left !important; line-height: 1.7; }
+.layout-right-col { flex: 0.9; text-align: left !important; padding-left: 12px; line-height: 1.7; }
+.txt-label { color: #94a3b8; font-size: 0.82rem; white-space: nowrap; } 
+.txt-label-rsi { color: #a78bfa; font-size: 0.82rem; white-space: nowrap; } 
+.txt-bold-val { color: #f1f5f9; font-size: 0.82rem; font-weight: 600; }
+.custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
+
+/* TW50 專屬卡片細節 */
+h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
+.score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
+.action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; width: 100%; text-align: center; padding: 5px; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; }
+</style>
+''', unsafe_allow_html=True)
+
+
+# ==========================================================
 # 1️⃣ 🚀 系統全域設定 
 # ==========================================================
-APP_VERSION = "TW50_V3.30"
+APP_VERSION = "TW50_V3.31"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -207,111 +313,6 @@ def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME
         return f"================\n⚠️ 績效統計錯誤: {e}"
 
 # ==========================================================
-# 4️⃣ 🎨 頂級深色優化視覺 CSS (嚴格套用 MON_V3.0.1 原版)
-# ==========================================================
-st.markdown(r'''
-<style>
-/* =========================================
-   1. 全域與基礎設定 (字體與網頁背景)
-   ========================================= */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-html, body, [data-testid="stAppViewContainer"] { 
-    font-family: 'Inter', sans-serif !important; 
-    background-color: #0e1117 !important; /* 全域深黑底色 */
-    color: #f1f5f9 !important; /* 基礎文字灰白 */
-}
-[data-testid="stActionElements"] { display: none !important; }
-header[data-testid="stHeader"] { background-color: transparent !important; }
-.main .block-container { padding-top: 1.5rem !important; margin-top: -30px !important; }
-h1 { margin-top: 0px !important; padding-top: 0px !important; margin-bottom: 5px !important; }
-
-/* =========================================
-   2. 側邊欄與元件視覺 (輸入框、選單、按鈕)
-   ========================================= */
-[data-testid="stSidebar"] { 
-    background-color: #171a23 !important; /* 側邊欄稍淺的深黑 */
-    border-right: 1px solid #2d3748 !important; 
-}
-[data-testid="stVerticalBlockBorderWrapper"] { 
-    background-color: #1e293b !important; /* 側邊欄容器底色 */
-    border: 1px solid #94a3b8 !important; 
-    border-radius: 12px !important; 
-    padding: 15px !important; 
-    margin-bottom: 10px !important; 
-}
-[data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg, button[kind="header"] svg { 
-    color: #ffffff !important; fill: #ffffff !important; 
-}
-.stTextInput div[data-baseweb="input"], .stSelectbox div[data-baseweb="select"] > div { 
-    background-color: #0f172a !important; /* 輸入框深藍黑底色 */
-    border: 1px solid #475569 !important; 
-    border-radius: 8px !important;  
-}
-.stTextInput input { color: #ffffff !important; background-color: transparent !important; }
-.stSelectbox div[data-baseweb="select"] span { color: #ffffff !important; }
-[data-testid="stSidebar"] h3 { color: #ffffff !important; font-size: 1.1rem !important; font-weight: 700 !important; margin-bottom: 15px !important; margin-top: 0px !important; padding-top: 0px !important; }
-[data-testid="stWidgetLabel"] p, div[data-testid="stMarkdownContainer"] p, .stSlider label { color: #cbd5e1 !important; font-weight: 600 !important; font-size: 0.95rem !important; }
-div[role="radiogroup"] label { color: #f1f5f9 !important; font-weight: 600 !important; }
-
-/* 按鈕：漸層藍色與 Hover 效果 */
-.stButton > button { 
-    background: linear-gradient(135deg, #3b82f6, #1d4ed8) !important; 
-    color: white !important; border: none !important; border-radius: 8px !important; font-weight: 600 !important; transition: all 0.2s ease !important; 
-}
-.stButton > button:hover { box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important; transform: translateY(-1px) !important; }
-
-/* =========================================
-   3. 矩陣排版與個股卡片基礎外觀
-   ========================================= */
-.section-title { font-size: 1.3rem; font-weight: 700; color: #f8fafc; margin: 15px 0 10px 0; padding-left: 8px; border-left: 4px solid #3b82f6; }
-.flex-matrix-container { display: flex; flex-wrap: wrap; gap: 14px; width: 100%; justify-content: flex-start !important; margin-bottom: 15px; }
-.stock-compact-card { 
-    background-color: #171a23; 
-    border: 1px solid #2d3748; 
-    border-radius: 12px; padding: 16px; 
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); 
-    width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; 
-}
-
-/* =========================================
-   4. 台美股專屬漲跌色 (台股紅漲綠跌 / 美股綠漲紅跌)
-   ========================================= */
-.card-tw-up { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
-.card-tw-down { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
-.card-us-up { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
-.card-us-down { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
-
-.alert-tw-up { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-tw-down { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-us-up { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-us-down { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-
-/* =========================================
-   5. 字體與排版細節 (標題、價格、資訊區)
-   ========================================= */
-.card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; justify-content: space-between; align-items: baseline; }
-.card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; } 
-.card-middle-layout { display: flex; justify-content: space-between; margin-bottom: 4px; }
-.layout-left-col { flex: 1.1; border-right: 1px dashed #2d3748; padding-right: 4px; text-align: left !important; line-height: 1.7; }
-.layout-right-col { flex: 0.9; text-align: left !important; padding-left: 12px; line-height: 1.7; }
-.txt-label { color: #94a3b8; font-size: 0.82rem; white-space: nowrap; } 
-.txt-label-rsi { color: #a78bfa; font-size: 0.82rem; white-space: nowrap; } 
-.txt-bold-val { color: #f1f5f9; font-size: 0.82rem; font-weight: 600; }
-.custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
-.alert-empty { background-color: transparent; color: transparent; }
-
-/* =========================================
-   6. TW50 專屬卡片細節 (不破壞原架構)
-   ========================================= */
-h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
-.score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
-/* 保留買進/觀望配色，但套用於 custom-alert-box 結構內 */
-.action-buy { color: #f2cc60; background-color: rgba(242, 204, 96, 0.15) !important; border: 1px dashed #f2cc60; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-</style>
-''' , unsafe_allow_html=True)
-
-# ==========================================================
 # 5️⃣ 💾 初始化監測清單與記憶狀態
 # ==========================================================
 if 'custom_watch' not in st.session_state: 
@@ -325,12 +326,11 @@ with st.sidebar:
     with st.container(border=True):
         st.markdown("### ⚙️ 控制與設定面板")
 
-    # 嚴格對齊 MON 樣板的 HTML 標題與無 collapsed label 輸入框
     with st.container(border=True):
         st.markdown("### ➕ 新增監測股票")
         st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>✍️ 手動輸入股票</div>", unsafe_allow_html=True)
         nt = st.text_input("輸入股票代碼", value="", placeholder="例: 2330.TW", key="sym_manual").strip().upper()
-        if st.button("確認輸入 ", use_container_width=True, key="btn_manual"):
+        if st.button("確認輸入", use_container_width=True, key="btn_manual"):
             if nt and nt not in st.session_state.custom_watch:
                 st.session_state.custom_watch.append(nt)
             safe_rerun()
@@ -367,7 +367,6 @@ with st.sidebar:
     tpe_now = now_utc.astimezone(pytz.timezone('Asia/Taipei'))
     tpe_time_str = tpe_now.strftime("%H:%M:%S %m/%d/%Y")
 
-    # 完全對齊 MON_V3.0.1 的系統版本狀態卡片
     st.markdown(
         f"""
         <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
@@ -422,18 +421,16 @@ else:
         high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
         rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
         
-        # 狀態映射：大於門檻帶有特定警示，否則呈現預設觀望
+        # 嚴格套用 MON 樣板的 CSS 類別
         if score >= config.setup_score_threshold:
             stop_tgt = high_today - (config.atr_multiplier * atr)
             risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
-            # 這裡套用原本卡片的原生排版邏輯
-            action_html = f'<div class="custom-alert-box action-buy">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
+            action_html = f'<div class="alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
             card_bg_class = "card-tw-up"
         else:
-            action_html = f'<div class="custom-alert-box action-wait">⏳ 觀察多頭動能續航</div>'
-            card_bg_class = "" # 中性背景
+            action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
+            card_bg_class = ""
 
-        # 嚴格依照 MON_v3.0.1 結構組裝 HTML 小卡
         card = (
             f'<div class="stock-compact-card {card_bg_class}">'
             f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
