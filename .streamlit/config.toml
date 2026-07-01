@@ -1,0 +1,14 @@
+[theme]
+# i. 功能區 (主畫面) 深色底
+backgroundColor = "#0e1117"
+
+# ii. 控制項 (側邊欄) 深色底
+secondaryBackgroundColor = "#171a23"
+
+# 全局字體顏色 (淺色)
+textColor = "#f1f5f9"
+
+# 全局主要顏色 (按鈕、亮點)
+primaryColor = "#3b82f6"
+
+font = "sans serif"
