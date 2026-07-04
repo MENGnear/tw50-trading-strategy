@@ -2,7 +2,7 @@
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
 # 檔案名稱 : app.py
-# 程式版本 : TW50_V3.32 (純淨生命週期對齊，捨棄所有 CSS Hack)
+# 程式版本 : TW50_V3.33 (導入達標過濾，移除背景亮顯與冗餘判斷)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
 
@@ -124,7 +124,7 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 # ==========================================================
 # 3️⃣ 🚀 系統全域設定與通報模組
 # ==========================================================
-APP_VERSION = "TW50_V3.32"
+APP_VERSION = "TW50_V3.33"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -393,59 +393,59 @@ else:
         try:
             df_tk = combined_df[combined_df['ticker'] == tk]
             data = calculate_dashboard_metrics(df_tk, config)
-            if data:
+            # 🎯 過濾：只留下分數 >= setup_score_threshold 的股票
+            if data and data.get('Score', 0) >= config.setup_score_threshold:
                 data['ticker'] = tk
                 display_list.append(data)
         except Exception as e: pass
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
     
-    html_cards = '<div class="flex-matrix-container">'
-    for d in display_list:
-        score = d.get('Score', 0)
-        price = d.get('Close', 0.0)
-        high_today = d.get('High', 0.0)
-        atr = d.get('ATR', 0.0)
-        
-        price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
-        high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
-        rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
-        
-        # 嚴格使用 MON 原生定義的 alert 樣式，確保背景色不會跑掉
-        if score >= config.setup_score_threshold:
+    # 🎯 防呆處理：若過濾後無任何達標標的
+    if not display_list:
+        st.info("📌 目前盤面上暫無動能評分達標之強勢標的，請持續觀察。")
+    else:
+        html_cards = '<div class="flex-matrix-container">'
+        for d in display_list:
+            score = d.get('Score', 0)
+            price = d.get('Close', 0.0)
+            high_today = d.get('High', 0.0)
+            atr = d.get('ATR', 0.0)
+            
+            price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
+            high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
+            rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
+            
+            # 🎯 移除背景亮顯與 if-else 判斷，全數使用純淨卡片搭配底部突破提示
             stop_tgt = high_today - (config.atr_multiplier * atr)
             risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
             action_html = f'<div class="custom-alert-box alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
-            card_bg_class = "card-tw-up"
-        else:
-            action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
-            card_bg_class = ""
 
-        card = (
-            f'<div class="stock-compact-card {card_bg_class}">'
-            f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
-            f'<div class="card-price-txt">{price_str}</div>'
-            f'<div class="card-middle-layout">'
-            f'<div class="layout-left-col">'
-            f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
-            f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
-            f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
-            f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
-            f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
-            f'</div>'
-            f'<div class="layout-right-col">'
-            f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
-            f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
-            f'</div>'
-            f'</div>'
-            f'{action_html}'
-            f'</div>'
-        )
-        html_cards += card
+            card = (
+                f'<div class="stock-compact-card">'
+                f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
+                f'<div class="card-price-txt">{price_str}</div>'
+                f'<div class="card-middle-layout">'
+                f'<div class="layout-left-col">'
+                f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
+                f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
+                f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
+                f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
+                f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
+                f'</div>'
+                f'<div class="layout-right-col">'
+                f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
+                f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
+                f'</div>'
+                f'</div>'
+                f'{action_html}'
+                f'</div>'
+            )
+            html_cards += card
+            
+        html_cards += '</div>'
+        st.markdown(html_cards, unsafe_allow_html=True)
         
-    html_cards += '</div>'
-    st.markdown(html_cards, unsafe_allow_html=True)
-    
     st_autorefresh(interval=refresh_sec * 1000, key="stock_refresh")
