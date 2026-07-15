@@ -1,36 +1,27 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
-# 檔案名稱 : Tw50_app_v03.34.py
-# 程式版本 : TW50_app_v03.34 (基底：v3.33)
+# 檔案名稱 : Tw50_app_v03.35.py
+# 程式版本 : TW50_app_v03.35 (導入 SSOT 單一資料源，極速瘦身版)
 #
 # 📋 進版說明 (Version Notes):
-#   1. 升級系統資訊看板，同時呈現前端 APP 版本與後端 Main 引擎版本。
-#   2. 區分資料流時間：
-#      - 「🤖 最後資料庫更新」：自動偵測並抓取 SQLite 資料庫或 CSV 檔案的最後寫入/更新時間。
-#      - 「🕒 最後資料更新」：代表 Streamlit 前端網頁重新整理載入數據的最新時間。
-#   3. 優化側邊欄資訊看板 CSS 視覺，加入虛線分界，使各指標區塊對齊、易於閱讀。
+#   1. 徹底拔除前端 yfinance 與複雜的指標運算邏輯，大幅提升網頁載入極速。
+#   2. 完美實作 SSOT：直接讀取 tw50_strategy.db 中的 dashboard_signals 表，確保與 Telegram 100% 資訊同步。
+#   3. 優化自選股防呆機制：若輸入未在後端監測池的標的，將優雅提示而不引發報錯。
 #
 # 🏷️ 區塊說明 (Block Description):
-#   - 1. 頁面設定與全域配置
-#   - 2. CSS 樣板注入 (深色主題、小卡排版、側邊欄元件)
-#   - 3. 系統全域常數、資料庫時間偵測、TG 通報模組
-#   - 4. 資料庫與 CSV 數據載入 (含暴力清洗)
-#   - 5. 技術指標 (MA, MACD, ATR, RSI) 與評分計算邏輯
-#   - 6. 監測清單狀態管理 (st.session_state)
-#   - 7. 側邊欄控制面板 (自選股輸入、移除、重新整理、系統資訊)
-#   - 8. 主畫面戰情室看板渲染 (達標過濾、卡片矩陣與防呆)
-#
-# 💡 備註說明 (Remarks):
-#   - 本次改版不影響任何底層交易邏輯、指標權重，僅優化 UI/UX。
-#   - 若系統偵測不到本地資料庫或 CSV 檔案，最後資料庫更新時間將友善顯示為 "N/A"。
+#   - 1~2: 頁面設定與 MON 精美卡片 CSS 樣板 (完全保留不變)
+#   - 3: 系統全域常數與 TG 通報模組
+#   - 4: 💾 單一資料庫讀取 (取代原本的 yf 與 csv 讀取)
+#   - 5: (已拔除) 前端運算引擎移交至 Main
+#   - 6~7: 側邊欄控制面板與系統版本雙軌時間
+#   - 8: 📈 主畫面看盤終端矩陣 (直接讀取資料庫渲染 HTML)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 import os
 import json
 import urllib.request
@@ -58,7 +49,7 @@ st.markdown(r'''
 /* =========================================
    1. 全域與基礎設定 (字體與網頁背景)
    ========================================= */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 html, body, [data-testid="stAppViewContainer"] { 
     font-family: 'Inter', sans-serif !important; 
     background-color: #0e1117 !important; 
@@ -116,15 +107,7 @@ div[role="radiogroup"] label { color: #f1f5f9 !important; font-weight: 600 !impo
     width: 295px !important; max-width: 295px !important; min-width: 295px !important; box-sizing: border-box; 
 }
 
-.card-tw-up { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
-.card-tw-down { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
-.card-us-up { background-color: rgba(16, 185, 129, 0.12) !important; border: 1px solid rgba(16, 185, 129, 0.35) !important; }
-.card-us-down { background-color: rgba(239, 68, 68, 0.12) !important; border: 1px solid rgba(239, 68, 68, 0.35) !important; }
-
 .alert-tw-up { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-tw-down { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-us-up { color: #10b981; background-color: rgba(16, 185, 129, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
-.alert-us-down { color: #ef4444; background-color: rgba(239, 68, 68, 0.2) !important; width: 100%; text-align: center; padding: 5px; border-radius: 6px; }
 
 .card-title-txt { margin: 0 0 2px 0; font-size: 1.25rem; font-weight: 700; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; justify-content: space-between; align-items: baseline; }
 .card-price-txt { color: #38bdf8; margin: 0 0 10px 0; font-size: 1.9rem; font-weight: 700; }
@@ -135,39 +118,26 @@ div[role="radiogroup"] label { color: #f1f5f9 !important; font-weight: 600 !impo
 .txt-label-rsi { color: #a78bfa; font-size: 0.82rem; white-space: nowrap; } 
 .txt-bold-val { color: #f1f5f9; font-size: 0.82rem; font-weight: 600; }
 .custom-alert-box { min-height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
-.alert-empty { background-color: transparent; color: transparent; }
 
 /* =========================================
-   TW50 專屬卡片細節 (不破壞原架構，對齊類別)
+   TW50 專屬卡片細節
    ========================================= */
 h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bottom: 10px; border-bottom: 2px solid #1e293b; margin-bottom: 20px; font-size: 1.8rem; }
 .score-highlight { color: #facc15; font-size: 1.6rem; font-weight: 900; }
-.action-wait { color: #94a3b8; background-color: rgba(148, 163, 184, 0.1) !important; border: 1px dashed #475569; width: 100%; text-align: center; padding: 5px; border-radius: 6px; margin-top: 10px; font-size: 0.82rem; font-weight: 700; box-sizing: border-box; }
 </style>
 ''', unsafe_allow_html=True)
 
 # ==========================================================
-# 3️⃣ 🚀 全域常數、資料庫時間偵測、TG 通報模組
+# 3️⃣ 🚀 全域常數與 TG 通報模組
 # ==========================================================
-APP_VERSION = "TW50_app_v03.34"
-STRATEGY_VERSION = "v02.23"
+APP_VERSION = "TW50_app_v03.35"
+STRATEGY_VERSION = "v02.24"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
 @dataclass
 class StrategyConfig:
-    ma_fast: int = 20
-    ma_slow: int = 60
-    vma_period: int = 5
-    vol_ratio: float = 1.3
-    macd_fast: int = 12
-    macd_slow: int = 26
-    macd_signal: int = 9
-    atr_period: int = 20
-    atr_multiplier: float = 2.0
     setup_score_threshold: int = 45
-    max_setup_days: int = 5
-    capital_weight_per_trade: float = 0.10
 
 config = StrategyConfig()
 
@@ -177,20 +147,14 @@ def safe_rerun():
 
 def get_db_last_update_time():
     """
-    🔍 動態偵測資料庫最後寫入/修改時間 (包含主資料庫及CSV暫存檔)
+    🔍 偵測 SQLite 資料庫的最後更新時間
     """
-    times = []
-    for file in [DB_NAME, "temp_data.csv"]:
-        if os.path.exists(file):
-            try:
-                mtime = os.path.getmtime(file)
-                dt = datetime.datetime.fromtimestamp(mtime, tz=TAIPEI_TZ)
-                times.append(dt)
-            except Exception:
-                pass
-    if times:
-        latest_dt = max(times)
-        return latest_dt.strftime("%H:%M:%S %m/%d/%Y")
+    if os.path.exists(DB_NAME):
+        try:
+            mtime = os.path.getmtime(DB_NAME)
+            dt = datetime.datetime.fromtimestamp(mtime, tz=TAIPEI_TZ)
+            return dt.strftime("%H:%M:%S %m/%d/%Y")
+        except: pass
     return "N/A"
 
 def send_telegram_alert(message):
@@ -215,133 +179,19 @@ def send_telegram_alert(message):
         return False, f"Telegram 發送失敗: {e}"
 
 # ==========================================================
-# 4️⃣ 🧠 資料讀取與暴力清洗 (TW50 專用)
+# 4️⃣ 💾 SSOT 直連資料庫讀取
 # ==========================================================
-def clean_dataframe(df):
-    if df.empty: return df
-    if 'Datetime' in df.columns: df = df.rename(columns={'Datetime': 'Date'})
-    if 'Date' in df.columns:
-        df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-        try:
-            if hasattr(df['Date'].dt, 'tz') and df['Date'].dt.tz is not None:
-                df['Date'] = df['Date'].dt.tz_localize(None)
-        except: pass
-    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
-    return df
-
 @st.cache_data(ttl=60)
-def load_csv_data():
-    file_path = "temp_data.csv"
-    if not os.path.exists(file_path): return pd.DataFrame(), "⚠️ 找不到資料檔 (temp_data.csv)"
+def load_signals_from_db():
+    if not os.path.exists(DB_NAME):
+        return pd.DataFrame(), f"⚠️ 找不到後端資料庫 ({DB_NAME})，請確認 Main 引擎已執行。"
     try:
-        df = pd.read_csv(file_path)
-        df = clean_dataframe(df)
+        with sqlite3.connect(DB_NAME) as conn:
+            # 直接讀取 Main 算好的終極結果
+            df = pd.read_sql_query("SELECT * FROM dashboard_signals", conn)
         return df, "✅ 載入成功"
-    except Exception as e: return pd.DataFrame(), f"❌ 讀取錯誤: {e}"
-
-@st.cache_data(ttl=300)
-def fetch_custom_stock(ticker):
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period="6mo")
-        if df.empty: return None
-        df = df.reset_index()
-        df['ticker'] = ticker
-        return clean_dataframe(df)
-    except: return None
-
-# ==========================================================
-# 5️⃣ 📊 核心技術指標與績效引擎
-# ==========================================================
-def calculate_dashboard_metrics(df_stock, config: StrategyConfig):
-    df = df_stock.dropna(subset=['Close']).sort_values('Date').copy()
-    if len(df) < 2: return None
-
-    df['MA_Fast'] = df['Close'].rolling(config.ma_fast).mean().fillna(0)
-    df['MA_Slow'] = df['Close'].rolling(config.ma_slow).mean().fillna(0)
-    df['V_MA'] = df['Volume'].rolling(config.vma_period).mean().fillna(0)
-
-    ema_fast = df['Close'].ewm(span=config.macd_fast, adjust=False).mean()
-    ema_slow = df['Close'].ewm(span=config.macd_slow, adjust=False).mean()
-    df['DIF'] = ema_fast - ema_slow
-    df['DEA'] = df['DIF'].ewm(span=config.macd_signal, adjust=False).mean()
-    df['MACD_Hist'] = (df['DIF'] - df['DEA']).fillna(0)
-
-    df['Prev_Close'] = df['Close'].shift(1).fillna(df['Close'])
-    df['TR'] = np.maximum(
-        df['High'] - df['Low'],
-        np.maximum(abs(df['High'] - df['Prev_Close']), abs(df['Low'] - df['Prev_Close']))
-    )
-    df['ATR'] = df['TR'].rolling(window=config.atr_period).mean().fillna(0)
-
-    df['RSI_6'], df['RSI_14'], df['RSI_24'] = 50.0, 50.0, 50.0
-    if len(df) >= 24:
-        delta = df['Close'].diff()
-        up, down = delta.clip(lower=0), -1 * delta.clip(upper=0)
-        for p in [6, 14, 24]:
-            ema_up = up.ewm(com=p-1, adjust=False).mean()
-            ema_down = down.ewm(com=p-1, adjust=False).mean()
-            df[f'RSI_{p}'] = 100 - (100 / (1 + ema_up / ema_down.replace(0, 1e-9)))
-
-    today = df.iloc[-1]
-    yest = df.iloc[-2] if len(df) > 1 else today
-
-    score_macd_trend = 15 if (today['MACD_Hist'] > yest['MACD_Hist']) else 0
-    score_ma20_cross = 10 if (today['MA_Fast'] > 0 and today['Close'] > today['MA_Fast']) else 0
-    score_ma20_slope = 0
-    if len(df) >= 6:
-        ma_fast_past = df['MA_Fast'].iloc[-6]
-        if ma_fast_past > 0 and ((today['MA_Fast'] / ma_fast_past) - 1) > 0.01:
-            score_ma20_slope = 15
-    score_ma60_trend = 10 if (today['MA_Slow'] > 0 and today['MA_Fast'] > today['MA_Slow']) else 0
-    score_volume_burst = 10 if (today['V_MA'] > 0 and today['Volume'] > (today['V_MA'] * config.vol_ratio)) else 0
-    
-    total_score = int(sum([score_macd_trend, score_ma20_cross, score_ma20_slope, score_ma60_trend, score_volume_burst]))
-
-    return {
-        'Date': today.get('Date', pd.Timestamp.now()),
-        'Close': today.get('Close', 0),
-        'High': today.get('High', 0),
-        'Score': total_score,
-        's1': score_macd_trend, 
-        's2': score_ma20_cross, 
-        's3': score_ma20_slope, 
-        's4': score_ma60_trend, 
-        's5': score_volume_burst,
-        'RSI_6': today['RSI_6'], 
-        'RSI_14': today['RSI_14'], 
-        'RSI_24': today['RSI_24'],
-        'ATR': today['ATR']
-    }
-
-def generate_performance_report(version, config: StrategyConfig, db_name=DB_NAME):
-    try:
-        with sqlite3.connect(db_name) as conn:
-            df = pd.read_sql_query("SELECT entry_date, exit_date, profit_pct FROM backtest_trades WHERE version = ? ORDER BY exit_date ASC", conn, params=(version,))
-        if df.empty: return "================\n📈 <b>策略績效健檢</b>\n目前無足夠歷史交易資料可供統計。"
-        
-        total_trades = len(df)
-        win_trades = df[df['profit_pct'] > 0]
-        win_rate = (len(win_trades) / total_trades) * 100 if total_trades > 0 else 0
-        weight_per_trade = config.capital_weight_per_trade
-        df['exit_date'] = pd.to_datetime(df['exit_date'])
-        df['realized_pnl'] = df['profit_pct'] * weight_per_trade
-        df['equity'] = 1.0 + df['realized_pnl'].cumsum()
-        df['peak'] = df['equity'].cummax()
-        df['drawdown'] = (df['equity'] - df['peak']) / df['peak']
-        sys_mdd = df['drawdown'].min() * 100 if not df.empty else 0
-        
-        return (
-            f"================\n"
-            f"📈 <b>策略已實現績效</b>\n"
-            f"• 總交易筆數: {total_trades} 筆\n"
-            f"• 勝率: {win_rate:.1f}%\n"
-            f"• 系統最大回撤: {sys_mdd:.1f}%\n"
-        )
-    except Exception as e:
-        return f"================\n⚠️ 績效統計錯誤: {e}"
+    except Exception as e: 
+        return pd.DataFrame(), f"❌ 資料庫讀取錯誤: {e}"
 
 # ==========================================================
 # 6️⃣ 💾 初始化監測清單與記憶狀態
@@ -350,7 +200,7 @@ if 'custom_watch' not in st.session_state:
     st.session_state.custom_watch = []
 
 # ==========================================================
-# 7️⃣ ⚙️ 側邊欄控制面板 (自選股輸入、移除、重新整理、系統資訊)
+# 7️⃣ ⚙️ 側邊欄控制面板
 # ==========================================================
 with st.sidebar:
     
@@ -358,8 +208,8 @@ with st.sidebar:
         st.markdown("### ⚙️ 控制與設定面板")
 
     with st.container(border=True):
-        st.markdown("### ➕ 新增監測股票")
-        st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>✍️ 手動輸入股票</div>", unsafe_allow_html=True)
+        st.markdown("### ➕ 自訂置頂股票")
+        st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>✍️ 從資料庫中強制顯示</div>", unsafe_allow_html=True)
         nt = st.text_input("輸入股票代碼", value="", placeholder="例: 2330.TW", key="sym_manual").strip().upper()
         if st.button("確認輸入", use_container_width=True, key="btn_manual"):
             if nt and nt not in st.session_state.custom_watch:
@@ -367,7 +217,7 @@ with st.sidebar:
             safe_rerun()
 
     with st.container(border=True):
-        st.markdown("### 🗑️ 移除監測清單")
+        st.markdown("### 🗑️ 移除置頂清單")
         if st.session_state.custom_watch:
             del_sym = st.selectbox("刪除目標", ["--- 請選擇 ---"] + st.session_state.custom_watch)
             if st.button("確認刪除", use_container_width=True) and del_sym != "--- 請選擇 ---":
@@ -389,8 +239,7 @@ with st.sidebar:
         if st.button("發送目前小卡狀態", use_container_width=True):
             with st.spinner("🚀 正在執行判定與通報..."):
                 now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
-                msg = f"📊 <b>{STRATEGY_VERSION} 台股 50 戰情室 (手動健康檢查)</b>\n🕒 {now_str} 回測\n================\n"
-                msg += "================\n✅ 系統目前正常運作中"
+                msg = f"📊 <b>{STRATEGY_VERSION} 台股 50 戰情室 (手動健康檢查)</b>\n🕒 {now_str} 測試\n================\n✅ 網頁與資料庫連線正常！"
                 send_telegram_alert(msg)
                 st.success("✅ 回測通報已成功發送至 Telegram！")
 
@@ -416,55 +265,56 @@ with st.sidebar:
     )
 
 # ==========================================================
-# 8️⃣ 📈 主畫面看盤終端矩陣
+# 8️⃣ 📈 主畫面看盤終端矩陣 (SSOT 極速渲染)
 # ==========================================================
 st.markdown('<h1 class="main-title">📈 台股 50 戰情室監控大廳</h1>', unsafe_allow_html=True)
 
-df_raw, status_msg = load_csv_data()
-combined_df = df_raw.copy() if not df_raw.empty else pd.DataFrame()
+df_signals, status_msg = load_signals_from_db()
 
-if 'custom_watch' in st.session_state:
-    for ct in st.session_state.custom_watch:
-        cdf = fetch_custom_stock(ct)
-        if cdf is not None and not cdf.empty:
-            combined_df = pd.concat([combined_df, cdf], ignore_index=True)
-
-if combined_df.empty:
+if df_signals.empty:
     st.error(status_msg)
 else:
-    display_list = []
-    tickers = combined_df['ticker'].unique() if 'ticker' in combined_df.columns else []
-    
-    for tk in tickers:
-        if pd.isna(tk): continue 
-        try:
-            df_tk = combined_df[combined_df['ticker'] == tk]
-            data = calculate_dashboard_metrics(df_tk, config)
-            # 🎯 僅過濾出分數大於等於 45 分的股票
-            if data and data.get('Score', 0) >= config.setup_score_threshold:
-                data['ticker'] = tk
-                display_list.append(data)
-        except Exception as e: pass
+    # 🎯 防呆檢查：確認自選股是否真的存在於後端資料庫中
+    db_tickers = df_signals['ticker'].values
+    not_found = [tk for tk in st.session_state.custom_watch if tk not in db_tickers]
+    if not_found:
+        st.warning(f"⚠️ 以下自選股未在後端 Main 引擎的監測清單中，無法取得資料：{', '.join(not_found)}")
 
-    display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
+    display_list = []
+    
+    for _, row in df_signals.iterrows():
+        d = row.to_dict()
+        ticker = d['ticker']
+        score = d.get('score', 0)
+        
+        # 顯示條件：分數達標，或者是使用者強制加入的自選股
+        is_setup = score >= config.setup_score_threshold
+        is_custom = ticker in st.session_state.custom_watch
+        
+        if is_setup or is_custom:
+            display_list.append(d)
+
+    # 排序：高分優先
+    display_list = sorted(display_list, key=lambda x: x.get('score', 0), reverse=True)
     
     if not display_list:
         st.info("📌 目前盤面上暫無動能評分達標之強勢標的，請持續觀察。")
     else:
         html_cards = '<div class="flex-matrix-container">'
         for d in display_list:
-            score = d.get('Score', 0)
-            price = d.get('Close', 0.0)
-            high_today = d.get('High', 0.0)
-            atr = d.get('ATR', 0.0)
+            score = d.get('score', 0)
+            price = d.get('close', 0.0)
+            high_today = d.get('high', 0.0)
+            stop_tgt = d.get('stop_tgt', 0.0)
+            risk_pct = d.get('risk_pct', 0.0)
             
             price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
             high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
-            rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
             
-            # 🎯 卡片移除背景亮顯，改為均一簡潔深色卡片 + 底部策略提示
-            stop_tgt = high_today - (config.atr_multiplier * atr)
-            risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
+            # 從資料庫提取 RSI
+            r6, r14, r24 = d.get('rsi_6', 0), d.get('rsi_14', 0), d.get('rsi_24', 0)
+            rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (r6 > r14 > r24) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
+            
             action_html = f'<div class="custom-alert-box alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
 
             card = (
@@ -473,16 +323,16 @@ else:
                 f'<div class="card-price-txt">{price_str}</div>'
                 f'<div class="card-middle-layout">'
                 f'<div class="layout-left-col">'
-                f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
-                f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
-                f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
-                f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
-                f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
+                f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d.get("s1",0)}</span><br>'
+                f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d.get("s2",0)}</span><br>'
+                f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d.get("s3",0)}</span><br>'
+                f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d.get("s4",0)}</span><br>'
+                f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d.get("s5",0)}</span>'
                 f'</div>'
                 f'<div class="layout-right-col">'
-                f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
-                f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
-                f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{r6:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{r14:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{r24:.1f}</span><br>'
                 f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
                 f'</div>'
                 f'</div>'
