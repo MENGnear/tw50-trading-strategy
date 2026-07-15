@@ -1,8 +1,29 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
-# 檔案名稱 : app.py
-# 程式版本 : TW50_V3.32 (純淨生命週期對齊，捨棄所有 CSS Hack)
+# 檔案名稱 : Tw50_app_v03.34.py
+# 程式版本 : TW50_app_v03.34 (基底：v3.33)
+#
+# 📋 進版說明 (Version Notes):
+#   1. 升級系統資訊看板，同時呈現前端 APP 版本與後端 Main 引擎版本。
+#   2. 區分資料流時間：
+#      - 「🤖 最後資料庫更新」：自動偵測並抓取 SQLite 資料庫或 CSV 檔案的最後寫入/更新時間。
+#      - 「🕒 最後資料更新」：代表 Streamlit 前端網頁重新整理載入數據的最新時間。
+#   3. 優化側邊欄資訊看板 CSS 視覺，加入虛線分界，使各指標區塊對齊、易於閱讀。
+#
+# 🏷️ 區塊說明 (Block Description):
+#   - 1. 頁面設定與全域配置
+#   - 2. CSS 樣板注入 (深色主題、小卡排版、側邊欄元件)
+#   - 3. 系統全域常數、資料庫時間偵測、TG 通報模組
+#   - 4. 資料庫與 CSV 數據載入 (含暴力清洗)
+#   - 5. 技術指標 (MA, MACD, ATR, RSI) 與評分計算邏輯
+#   - 6. 監測清單狀態管理 (st.session_state)
+#   - 7. 側邊欄控制面板 (自選股輸入、移除、重新整理、系統資訊)
+#   - 8. 主畫面戰情室看板渲染 (達標過濾、卡片矩陣與防呆)
+#
+# 💡 備註說明 (Remarks):
+#   - 本次改版不影響任何底層交易邏輯、指標權重，僅優化 UI/UX。
+#   - 若系統偵測不到本地資料庫或 CSV 檔案，最後資料庫更新時間將友善顯示為 "N/A"。
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
 
@@ -19,7 +40,9 @@ import sqlite3
 from streamlit_autorefresh import st_autorefresh
 from dataclasses import dataclass
 
-# ⚠️ 1. 頁面設定必須是第一步，確保環境與主題正確載入
+# ==========================================================
+# 1️⃣ 頁面設定與全域配置
+# ==========================================================
 st.set_page_config(
     page_title="台股戰情室監控大廳",
     page_icon="📊",
@@ -27,13 +50,15 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ⚠️ 2. 緊接著注入 CSS，完全對齊 MON 樣板，不加任何破壞性 Hack
+# ==========================================================
+# 2️⃣ CSS 樣板注入 (深色主題、小卡排版、側邊欄元件)
+# ==========================================================
 st.markdown(r'''
 <style>
 /* =========================================
    1. 全域與基礎設定 (字體與網頁背景)
    ========================================= */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght=400;500;600;700&display=swap');
 html, body, [data-testid="stAppViewContainer"] { 
     font-family: 'Inter', sans-serif !important; 
     background-color: #0e1117 !important; 
@@ -122,9 +147,9 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 ''', unsafe_allow_html=True)
 
 # ==========================================================
-# 3️⃣ 🚀 系統全域設定與通報模組
+# 3️⃣ 🚀 全域常數、資料庫時間偵測、TG 通報模組
 # ==========================================================
-APP_VERSION = "TW50_V3.32"
+APP_VERSION = "TW50_app_v03.34"
 STRATEGY_VERSION = "v02.23"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
@@ -149,6 +174,24 @@ config = StrategyConfig()
 def safe_rerun():
     if hasattr(st, 'rerun'): st.rerun()
     else: st.experimental_rerun()
+
+def get_db_last_update_time():
+    """
+    🔍 動態偵測資料庫最後寫入/修改時間 (包含主資料庫及CSV暫存檔)
+    """
+    times = []
+    for file in [DB_NAME, "temp_data.csv"]:
+        if os.path.exists(file):
+            try:
+                mtime = os.path.getmtime(file)
+                dt = datetime.datetime.fromtimestamp(mtime, tz=TAIPEI_TZ)
+                times.append(dt)
+            except Exception:
+                pass
+    if times:
+        latest_dt = max(times)
+        return latest_dt.strftime("%H:%M:%S %m/%d/%Y")
+    return "N/A"
 
 def send_telegram_alert(message):
     token = None
@@ -307,7 +350,7 @@ if 'custom_watch' not in st.session_state:
     st.session_state.custom_watch = []
 
 # ==========================================================
-# 7️⃣ ⚙️ 側邊欄選單 
+# 7️⃣ ⚙️ 側邊欄控制面板 (自選股輸入、移除、重新整理、系統資訊)
 # ==========================================================
 with st.sidebar:
     
@@ -317,7 +360,6 @@ with st.sidebar:
     with st.container(border=True):
         st.markdown("### ➕ 新增監測股票")
         st.markdown("<div style='color:#38bdf8; font-size:1.0rem; font-weight:700; margin-bottom:5px;'>✍️ 手動輸入股票</div>", unsafe_allow_html=True)
-        # 嚴格對齊 MON，使用標準的 st.text_input，不加 label_visibility="collapsed"
         nt = st.text_input("輸入股票代碼", value="", placeholder="例: 2330.TW", key="sym_manual").strip().upper()
         if st.button("確認輸入", use_container_width=True, key="btn_manual"):
             if nt and nt not in st.session_state.custom_watch:
@@ -337,7 +379,6 @@ with st.sidebar:
 
     with st.container(border=True):
         st.markdown("### ⏱️ 網頁刷新頻率")
-        # 這裡的 Slider 依然保持原生設計
         refresh_sec = st.slider("秒", 5, 60, 30, label_visibility="collapsed")
         if st.button("🔄 手動立即刷新", use_container_width=True):
             st.cache_data.clear()
@@ -353,17 +394,23 @@ with st.sidebar:
                 send_telegram_alert(msg)
                 st.success("✅ 回測通報已成功發送至 Telegram！")
 
+    # 🕒 計算與格式化雙軌時間戳
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    tpe_now = now_utc.astimezone(pytz.timezone('Asia/Taipei'))
+    tpe_now = now_utc.astimezone(TAIPEI_TZ)
     tpe_time_str = tpe_now.strftime("%H:%M:%S %m/%d/%Y")
+    db_update_time_str = get_db_last_update_time()
 
     st.markdown(
         f"""
-        <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; text-align:center; margin-top:15px; margin-bottom:15px;">
-            <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">系統當前版本</div>
-            <div style="color:#38bdf8; font-size:1.1rem; font-weight:700; margin-bottom:10px;">{APP_VERSION}</div>
-            <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:8px;">🕒 最後資料更新</div>
-            <div style="color:#f1f5f9; font-size:0.88rem; font-weight:600; margin-bottom:2px;">Tw {tpe_time_str}</div>
+        <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; margin-top:15px; margin-bottom:15px;">
+            <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px; text-align:center;">系統當前版本</div>
+            <div style="color:#38bdf8; font-size:1.0rem; font-weight:700; text-align:center; margin-bottom:2px;">{APP_VERSION}</div>
+            <div style="color:#38bdf8; font-size:1.0rem; font-weight:700; text-align:center; margin-bottom:10px;">TW50_main_{STRATEGY_VERSION}</div>
+            <div style="border-top: 1px dashed #475569; margin: 10px 0;"></div>
+            <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">🤖 最後資料庫更新</div>
+            <div style="color:#f1f5f9; font-size:0.88rem; font-weight:600; margin-bottom:8px; padding-left: 5px;">Tw {db_update_time_str}</div>
+            <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">🕒 最後資料更新</div>
+            <div style="color:#f1f5f9; font-size:0.88rem; font-weight:600; padding-left: 5px;">Tw {tpe_time_str}</div>
         </div>
         """, unsafe_allow_html=True
     )
@@ -393,59 +440,58 @@ else:
         try:
             df_tk = combined_df[combined_df['ticker'] == tk]
             data = calculate_dashboard_metrics(df_tk, config)
-            if data:
+            # 🎯 僅過濾出分數大於等於 45 分的股票
+            if data and data.get('Score', 0) >= config.setup_score_threshold:
                 data['ticker'] = tk
                 display_list.append(data)
         except Exception as e: pass
 
     display_list = sorted(display_list, key=lambda x: x.get('Score', 0), reverse=True)
     
-    html_cards = '<div class="flex-matrix-container">'
-    for d in display_list:
-        score = d.get('Score', 0)
-        price = d.get('Close', 0.0)
-        high_today = d.get('High', 0.0)
-        atr = d.get('ATR', 0.0)
-        
-        price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
-        high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
-        rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
-        
-        # 嚴格使用 MON 原生定義的 alert 樣式，確保背景色不會跑掉
-        if score >= config.setup_score_threshold:
+    if not display_list:
+        st.info("📌 目前盤面上暫無動能評分達標之強勢標的，請持續觀察。")
+    else:
+        html_cards = '<div class="flex-matrix-container">'
+        for d in display_list:
+            score = d.get('Score', 0)
+            price = d.get('Close', 0.0)
+            high_today = d.get('High', 0.0)
+            atr = d.get('ATR', 0.0)
+            
+            price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
+            high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
+            rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (d.get('RSI_6', 0) > d.get('RSI_14', 0) > d.get('RSI_24', 0)) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
+            
+            # 🎯 卡片移除背景亮顯，改為均一簡潔深色卡片 + 底部策略提示
             stop_tgt = high_today - (config.atr_multiplier * atr)
             risk_pct = (high_today - stop_tgt) / high_today * 100 if high_today > 0 else 0
             action_html = f'<div class="custom-alert-box alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
-            card_bg_class = "card-tw-up"
-        else:
-            action_html = f'<div class="action-wait">⏳ 觀察多頭動能續航</div>'
-            card_bg_class = ""
 
-        card = (
-            f'<div class="stock-compact-card {card_bg_class}">'
-            f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
-            f'<div class="card-price-txt">{price_str}</div>'
-            f'<div class="card-middle-layout">'
-            f'<div class="layout-left-col">'
-            f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
-            f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
-            f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
-            f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
-            f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
-            f'</div>'
-            f'<div class="layout-right-col">'
-            f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
-            f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
-            f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
-            f'</div>'
-            f'</div>'
-            f'{action_html}'
-            f'</div>'
-        )
-        html_cards += card
+            card = (
+                f'<div class="stock-compact-card">'
+                f'<div class="card-title-txt">{d["ticker"]} <span class="score-highlight">{score}</span></div>'
+                f'<div class="card-price-txt">{price_str}</div>'
+                f'<div class="card-middle-layout">'
+                f'<div class="layout-left-col">'
+                f'<span class="txt-label">MACD:</span><span class="txt-bold-val">{d["s1"]}</span><br>'
+                f'<span class="txt-label">MA20:</span><span class="txt-bold-val">{d["s2"]}</span><br>'
+                f'<span class="txt-label">斜率:</span><span class="txt-bold-val">{d["s3"]}</span><br>'
+                f'<span class="txt-label">趨勢:</span><span class="txt-bold-val">{d["s4"]}</span><br>'
+                f'<span class="txt-label">量能:</span><span class="txt-bold-val">{d["s5"]}</span>'
+                f'</div>'
+                f'<div class="layout-right-col">'
+                f'<span class="txt-label-rsi">R6:</span><span class="txt-bold-val">{d["RSI_6"]:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R14:</span><span class="txt-bold-val">{d["RSI_14"]:.1f}</span><br>'
+                f'<span class="txt-label-rsi">R24:</span><span class="txt-bold-val">{d["RSI_24"]:.1f}</span><br>'
+                f'<div style="margin-top:6px; font-size:0.8rem;">{rsi_msg}</div>'
+                f'</div>'
+                f'</div>'
+                f'{action_html}'
+                f'</div>'
+            )
+            html_cards += card
+            
+        html_cards += '</div>'
+        st.markdown(html_cards, unsafe_allow_html=True)
         
-    html_cards += '</div>'
-    st.markdown(html_cards, unsafe_allow_html=True)
-    
     st_autorefresh(interval=refresh_sec * 1000, key="stock_refresh")
