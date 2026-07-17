@@ -1,20 +1,19 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
-# 檔案名稱 : Tw50_app_v03.35.py
-# 程式版本 : TW50_app_v03.35 (導入 SSOT 單一資料源，極速瘦身版)
+# 檔案名稱 : Tw50_app_v03.36.py
+# 程式版本 : TW50_app_v03.36 (動態撈取 Main 版本與動態推播組裝)
 #
 # 📋 進版說明 (Version Notes):
-#   1. 徹底拔除前端 yfinance 與複雜的指標運算邏輯，大幅提升網頁載入極速。
-#   2. 完美實作 SSOT：直接讀取 tw50_strategy.db 中的 dashboard_signals 表，確保與 Telegram 100% 資訊同步。
-#   3. 優化自選股防呆機制：若輸入未在後端監測池的標的，將優雅提示而不引發報錯。
+#   1. 優化手動推播：按鈕觸發時自動撈取 score >= 45 的標的，並以極簡 Emoji 格式發送。
+#   2. 優化版本顯示：自動去資料庫 backtest_trades 撈取 Main 引擎的最新版本號，無需手動更改。
 #
 # 🏷️ 區塊說明 (Block Description):
 #   - 1~2: 頁面設定與 MON 精美卡片 CSS 樣板 (完全保留不變)
-#   - 3: 系統全域常數與 TG 通報模組
-#   - 4: 💾 單一資料庫讀取 (取代原本的 yf 與 csv 讀取)
-#   - 5: (已拔除) 前端運算引擎移交至 Main
-#   - 6~7: 側邊欄控制面板與系統版本雙軌時間
+#   - 3: 系統全域常數與動態版本號撈取函式
+#   - 4: 💾 單一資料庫讀取 
+#   - 6: 初始化監測清單
+#   - 7: 側邊欄控制面板 (包含動態推播組裝與動態版本號顯示)
 #   - 8: 📈 主畫面看盤終端矩陣 (直接讀取資料庫渲染 HTML)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
@@ -128,10 +127,9 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 ''', unsafe_allow_html=True)
 
 # ==========================================================
-# 3️⃣ 🚀 全域常數與 TG 通報模組
+# 3️⃣ 🚀 全域常數、動態版本撈取與 TG 通報模組
 # ==========================================================
-APP_VERSION = "TW50_app_v03.35"
-STRATEGY_VERSION = "v02.24"
+APP_VERSION = "TW50_app_v03.36"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
@@ -144,6 +142,21 @@ config = StrategyConfig()
 def safe_rerun():
     if hasattr(st, 'rerun'): st.rerun()
     else: st.experimental_rerun()
+
+def get_main_version_from_db():
+    """
+    🔍 偵測資料庫中 backtest_trades 表格留存的最高（最新）版本號
+    """
+    if os.path.exists(DB_NAME):
+        try:
+            with sqlite3.connect(DB_NAME) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT MAX(version) FROM backtest_trades")
+                res = cursor.fetchone()
+                if res and res[0]:
+                    return res[0]
+        except: pass
+    return "vUnknown"
 
 def get_db_last_update_time():
     """
@@ -238,12 +251,45 @@ with st.sidebar:
         st.markdown("### 🛠️ 手動測試推播")
         if st.button("發送目前小卡狀態", use_container_width=True):
             with st.spinner("🚀 正在執行判定與通報..."):
-                now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %I.%M.%S %p")
-                msg = f"📊 <b>{STRATEGY_VERSION} 台股 50 戰情室 (手動健康檢查)</b>\n🕒 {now_str} 測試\n================\n✅ 網頁與資料庫連線正常！"
-                send_telegram_alert(msg)
+                main_version_str = get_main_version_from_db()
+                now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
+                
+                # 🎯 動態組裝 Telegram 報告
+                msg_parts = [
+                    f"📊 <b>{main_version_str} 台股戰情室回報</b>",
+                    f"🕒 {now_str}",
+                    "================"
+                ]
+                
+                # 撈取並過濾目前達標清單
+                df_signals_alert, _ = load_signals_from_db()
+                alerts_setup = []
+                
+                if not df_signals_alert.empty:
+                    df_setup = df_signals_alert[df_signals_alert['score'] >= config.setup_score_threshold].sort_values(by='score', ascending=False)
+                    for _, row in df_setup.iterrows():
+                        tk = row['ticker']
+                        sc = int(row['score'])
+                        hi = row['high']
+                        st_tgt = row['stop_tgt']
+                        rp = row['risk_pct']
+                        alerts_setup.append(f"🔥{tk} | 📊{sc} | 🟢{hi:.2f} | 🔴 {st_tgt:.2f} (-{rp:.1f}%)")
+                
+                if alerts_setup:
+                    msg_parts.append("🎯 <b>潛力突破 SETUP 標的</b>")
+                    msg_parts.extend(alerts_setup)
+                else:
+                    msg_parts.append("🎯 盤面無達標突破標的。")
+                    
+                msg_parts.append("================")
+                msg_parts.append("✅ 網頁與資料庫連線正常！")
+                
+                final_msg = "\n".join(msg_parts)
+                send_telegram_alert(final_msg)
                 st.success("✅ 回測通報已成功發送至 Telegram！")
 
-    # 🕒 計算與格式化雙軌時間戳
+    # 🕒 獲取動態版本號與時間戳
+    main_display_ver = get_main_version_from_db()
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     tpe_now = now_utc.astimezone(TAIPEI_TZ)
     tpe_time_str = tpe_now.strftime("%H:%M:%S %m/%d/%Y")
@@ -254,7 +300,7 @@ with st.sidebar:
         <div style="background-color:#1e293b; padding:12px; border-radius:8px; border:1px solid #475569; margin-top:15px; margin-bottom:15px;">
             <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px; text-align:center;">系統當前版本</div>
             <div style="color:#38bdf8; font-size:1.0rem; font-weight:700; text-align:center; margin-bottom:2px;">{APP_VERSION}</div>
-            <div style="color:#38bdf8; font-size:1.0rem; font-weight:700; text-align:center; margin-bottom:10px;">TW50_main_{STRATEGY_VERSION}</div>
+            <div style="color:#38bdf8; font-size:1.0rem; font-weight:700; text-align:center; margin-bottom:10px;">TW50_main_{main_display_ver}</div>
             <div style="border-top: 1px dashed #475569; margin: 10px 0;"></div>
             <div style="color:#94a3b8; font-size:0.8rem; font-weight:600; margin-bottom:4px;">🤖 最後資料庫更新</div>
             <div style="color:#f1f5f9; font-size:0.88rem; font-weight:600; margin-bottom:8px; padding-left: 5px;">Tw {db_update_time_str}</div>
