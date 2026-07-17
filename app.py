@@ -1,20 +1,20 @@
 # ==========================================================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : 台股戰情室 Streamlit 監控儀表板
-# 檔案名稱 : Tw50_app_v03.36.py
-# 程式版本 : TW50_app_v03.36 (動態撈取 Main 版本與動態推播組裝)
+# 檔案名稱 : Tw50_app_v03.37.py
+# 程式版本 : TW50_app_v03.37 (雙重排序機制與推播格式淨化)
 #
 # 📋 進版說明 (Version Notes):
-#   1. 優化手動推播：按鈕觸發時自動撈取 score >= 45 的標的，並以極簡 Emoji 格式發送。
-#   2. 優化版本顯示：自動去資料庫 backtest_trades 撈取 Main 引擎的最新版本號，無需手動更改。
+#   1. 優化矩陣排序：實作「回測分數降冪 -> 股價降冪」的雙重排序邏輯。
+#   2. 優化手動推播：移除火焰符號，使用 .split(".")[0] 淨化代碼，並將風險值取絕對值。
 #
 # 🏷️ 區塊說明 (Block Description):
 #   - 1~2: 頁面設定與 MON 精美卡片 CSS 樣板 (完全保留不變)
 #   - 3: 系統全域常數與動態版本號撈取函式
 #   - 4: 💾 單一資料庫讀取 
 #   - 6: 初始化監測清單
-#   - 7: 側邊欄控制面板 (包含動態推播組裝與動態版本號顯示)
-#   - 8: 📈 主畫面看盤終端矩陣 (直接讀取資料庫渲染 HTML)
+#   - 7: 側邊欄控制面板 (套用雙重排序與極簡格式組裝)
+#   - 8: 📈 主畫面看盤終端矩陣 (套用雙重排序呈現)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==========================================================
 
@@ -129,7 +129,7 @@ h1.main-title { color: #f8fafc; font-weight: 800; text-align: left; padding-bott
 # ==========================================================
 # 3️⃣ 🚀 全域常數、動態版本撈取與 TG 通報模組
 # ==========================================================
-APP_VERSION = "TW50_app_v03.36"
+APP_VERSION = "TW50_app_v03.37"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = pytz.timezone('Asia/Taipei')
 
@@ -200,7 +200,6 @@ def load_signals_from_db():
         return pd.DataFrame(), f"⚠️ 找不到後端資料庫 ({DB_NAME})，請確認 Main 引擎已執行。"
     try:
         with sqlite3.connect(DB_NAME) as conn:
-            # 直接讀取 Main 算好的終極結果
             df = pd.read_sql_query("SELECT * FROM dashboard_signals", conn)
         return df, "✅ 載入成功"
     except Exception as e: 
@@ -254,26 +253,29 @@ with st.sidebar:
                 main_version_str = get_main_version_from_db()
                 now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
                 
-                # 🎯 動態組裝 Telegram 報告
                 msg_parts = [
                     f"📊 <b>{main_version_str} 台股戰情室回報</b>",
                     f"🕒 {now_str}",
                     "================"
                 ]
                 
-                # 撈取並過濾目前達標清單
                 df_signals_alert, _ = load_signals_from_db()
                 alerts_setup = []
                 
                 if not df_signals_alert.empty:
-                    df_setup = df_signals_alert[df_signals_alert['score'] >= config.setup_score_threshold].sort_values(by='score', ascending=False)
+                    # 🎯 實作雙重排序：分數降冪 -> 股價降冪
+                    df_setup = df_signals_alert[df_signals_alert['score'] >= config.setup_score_threshold].sort_values(by=['score', 'close'], ascending=[False, False])
                     for _, row in df_setup.iterrows():
                         tk = row['ticker']
                         sc = int(row['score'])
                         hi = row['high']
                         st_tgt = row['stop_tgt']
                         rp = row['risk_pct']
-                        alerts_setup.append(f"🔥{tk} | 📊{sc} | 🟢{hi:.2f} | 🔴 {st_tgt:.2f} (-{rp:.1f}%)")
+                        
+                        # 🎯 淨化推播格式：代碼拔尾巴，風險值取絕對值
+                        tk_clean = tk.split(".")[0]
+                        rp_abs = abs(rp)
+                        alerts_setup.append(f"{tk_clean} |📊{sc} | 🟢{hi:.2f} | 🔴{st_tgt:.2f} ({rp_abs:.1f}%)")
                 
                 if alerts_setup:
                     msg_parts.append("🎯 <b>潛力突破 SETUP 標的</b>")
@@ -288,7 +290,6 @@ with st.sidebar:
                 send_telegram_alert(final_msg)
                 st.success("✅ 回測通報已成功發送至 Telegram！")
 
-    # 🕒 獲取動態版本號與時間戳
     main_display_ver = get_main_version_from_db()
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     tpe_now = now_utc.astimezone(TAIPEI_TZ)
@@ -320,7 +321,6 @@ df_signals, status_msg = load_signals_from_db()
 if df_signals.empty:
     st.error(status_msg)
 else:
-    # 🎯 防呆檢查：確認自選股是否真的存在於後端資料庫中
     db_tickers = df_signals['ticker'].values
     not_found = [tk for tk in st.session_state.custom_watch if tk not in db_tickers]
     if not_found:
@@ -333,15 +333,14 @@ else:
         ticker = d['ticker']
         score = d.get('score', 0)
         
-        # 顯示條件：分數達標，或者是使用者強制加入的自選股
         is_setup = score >= config.setup_score_threshold
         is_custom = ticker in st.session_state.custom_watch
         
         if is_setup or is_custom:
             display_list.append(d)
 
-    # 排序：高分優先
-    display_list = sorted(display_list, key=lambda x: x.get('score', 0), reverse=True)
+    # 🎯 實作雙重排序：分數降冪 -> 股價降冪
+    display_list = sorted(display_list, key=lambda x: (x.get('score', 0), x.get('close', 0.0)), reverse=True)
     
     if not display_list:
         st.info("📌 目前盤面上暫無動能評分達標之強勢標的，請持續觀察。")
@@ -357,11 +356,10 @@ else:
             price_str = f"NT$ {price:.2f}" if price > 0 else "N/A"
             high_str = f"{high_today:.2f}" if high_today > 0 else "N/A"
             
-            # 從資料庫提取 RSI
             r6, r14, r24 = d.get('rsi_6', 0), d.get('rsi_14', 0), d.get('rsi_24', 0)
             rsi_msg = "<span style='color:#10b981; font-weight:700;'>🚀 多頭排列</span>" if (r6 > r14 > r24) else "<span style='color:#64748b;'>🔄 震盪整理</span>"
             
-            action_html = f'<div class="custom-alert-box alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{risk_pct:.1f}%)</div>'
+            action_html = f'<div class="custom-alert-box alert-tw-up">🎯 突破 {high_str} 買進 | 守 {stop_tgt:.1f} (-{abs(risk_pct):.1f}%)</div>'
 
             card = (
                 f'<div class="stock-compact-card">'
