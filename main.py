@@ -1,8 +1,8 @@
 # ==============================
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # 專案名稱 : TW50 Breakout Strategy
-# 檔案名稱 : Tw50_main_v02.25.py
-# 策略版本 : v02.25 (11維度回測修復、極簡 Emoji 推播、SSOT 單一資料源)
+# 檔案名稱 : Tw50_main_v02.26.py
+# 策略版本 : v02.26 (自動推播雙重排序機制與格式淨化)
 # ⭐⭐⭐⭐⭐⭐⭐⭐⭐⭐
 # ==============================
 
@@ -22,7 +22,7 @@ from dataclasses import dataclass
 # ==============================
 # Prt.00 全域常數與設定
 # ==============================
-STRATEGY_VERSION = "v02.25"
+STRATEGY_VERSION = "v02.26"
 DB_NAME = "tw50_strategy.db"
 TAIPEI_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
@@ -77,7 +77,6 @@ def init_db(db_name=DB_NAME):
         with sqlite3.connect(db_name) as conn:
             cursor = conn.cursor()
             
-            # 歷史每日股價暫存
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS daily_price (
                     ticker TEXT, Date TEXT, Open REAL, High REAL, Low REAL, Close REAL, Volume INTEGER,
@@ -85,7 +84,6 @@ def init_db(db_name=DB_NAME):
                 )
             ''')
             
-            # 🎯 完整 11 維度回測追蹤表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS backtest_trades (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,7 +102,6 @@ def init_db(db_name=DB_NAME):
             ''')
             cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_uniq ON backtest_trades(version, ticker, entry_date)')
             
-            # 🎯 前端儀表板 SSOT 單一資料源
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS dashboard_signals (
                     ticker TEXT PRIMARY KEY,
@@ -149,7 +146,6 @@ def calculate_indicator(df, config: StrategyConfig):
     )
     df['ATR'] = df['TR'].rolling(window=config.atr_period).mean().fillna(0)
 
-    # 為了前端小卡，補足多週期 RSI 的計算
     df['RSI_6'], df['RSI_14'], df['RSI_24'] = 50.0, 50.0, 50.0
     if len(df) >= 24:
         delta = df['Close'].diff()
@@ -198,7 +194,6 @@ def simulate_trade(df, ticker, config: StrategyConfig, strategy_version):
                 exit_price = curr_bar['Open']
                 exit_date = curr_bar['Date']
                 p, h, m, d = trade_statistics(entry_price, exit_price, entry_idx, i, peak_price, trade_max_drawdown)
-                # 🎯 嚴格組裝 11 維度資料包
                 trades.append((strategy_version, ticker, entry_date.strftime('%Y-%m-%d'), exit_date.strftime('%Y-%m-%d'), entry_price, exit_price, p, h, m, d, entry_score))
                 state = TradeState.IDLE
                 pending_exit = False
@@ -313,7 +308,7 @@ def sync_daily_data(db_name=DB_NAME):
         logging.error(f"資料庫同步操作失敗: {db_e}")
 
 # ==============================
-# Prt.05 Telegram 發送引擎 (隱藏績效功能)
+# Prt.05 Telegram 發送引擎 
 # ==============================
 def send_telegram_alert(message):
     token = os.environ.get('TELEGRAM_TOKEN')
@@ -329,21 +324,19 @@ def send_telegram_alert(message):
 def build_telegram_report(version, alerts_setup):
     now_str = datetime.datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d %H:%M:%S")
     msg_parts = [
-        f"📊 <b>{version} 台股戰情室</b>",
+        f"📊 <b>{version} 台股戰情室回報</b>",
         f"🕒 {now_str}"
     ]
 
     if alerts_setup:
         msg_parts.append("================")
-        # 由於已轉化為純數字/Emoji，依據分數反向排序
-        try: alerts_setup_sorted = sorted(alerts_setup, key=lambda x: int(x.split('📊')[1].split(' |')[0]), reverse=True)
-        except: alerts_setup_sorted = alerts_setup 
-        msg_parts.append("\n".join(alerts_setup_sorted))
+        msg_parts.append("🎯 <b>潛力突破 SETUP 標的</b>")
+        msg_parts.append("\n".join(alerts_setup))
     else:
-        msg_parts.append("================\n盤後無新增訊號。")
+        msg_parts.append("================\n🎯 盤面無達標突破標的。")
 
-    # 暫時隱藏績效報告，故不 append perf_report
-    msg_parts.append("================\n✅ 系統監控中")
+    msg_parts.append("================")
+    msg_parts.append("✅ 系統監控中")
     return "\n".join(msg_parts)
 
 # ==============================
@@ -352,7 +345,8 @@ def build_telegram_report(version, alerts_setup):
 def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
     logging.info("啟動 TW50 掃描與回測...")
     config = StrategyConfig()
-    alerts_setup = []
+    
+    raw_alerts = [] # 用於雙重排序的中繼字典陣列
     dashboard_records = []
     update_time_str = datetime.datetime.now(TAIPEI_TZ).strftime("%H:%M:%S %m/%d/%Y")
 
@@ -375,27 +369,29 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
                     
                     all_trades, df_processed = calculate_strategy(df_ticker, ticker, config, version)
                     
-                    # 擷取最後一筆狀態供 SSOT 與 TG 推播使用
                     last_bar = df_processed.iloc[-1]
                     score = int(last_bar.get('Score', 0))
+                    price = last_bar.get('Close', 0.0)
                     high = last_bar.get('High', 0.0)
                     atr = last_bar.get('ATR', 0.0)
                     stop_target = high - (config.atr_multiplier * atr)
                     risk_pct = ((high - stop_target) / high * 100) if high > 0 else 0
 
                     dashboard_records.append((
-                        ticker, update_time_str, last_bar.get('Close', 0), high, score,
+                        ticker, update_time_str, price, high, score,
                         int(last_bar.get('s1', 0)), int(last_bar.get('s2', 0)), int(last_bar.get('s3', 0)), int(last_bar.get('s4', 0)), int(last_bar.get('s5', 0)),
                         last_bar.get('RSI_6', 50), last_bar.get('RSI_14', 50), last_bar.get('RSI_24', 50),
                         atr, stop_target, risk_pct
                     ))
 
                     if score >= config.setup_score_threshold:
-                        # 🎯 替換為極簡 Emoji 推播格式
-                        alerts_setup.append(f"🔥{ticker} | 📊{score} | 🟢{high:.2f} | 🔴 {stop_target:.2f} (-{risk_pct:.1f}%)")
+                        # 🎯 放入字典等待雙重排序
+                        raw_alerts.append({
+                            'ticker': ticker, 'score': score, 'close': price,
+                            'high': high, 'stop_target': stop_target, 'risk_pct': risk_pct
+                        })
                     
                     if all_trades:
-                        # 🎯 精準寫入 11 維度包裹
                         cursor.executemany('''
                             INSERT OR REPLACE INTO backtest_trades (
                                 version, ticker, entry_date, exit_date, entry_price, exit_price, 
@@ -406,7 +402,6 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
                    
                 except Exception as inner_e: continue
 
-            # 寫入儀表板 SSOT
             if dashboard_records:
                 cursor.executemany('''
                     INSERT OR REPLACE INTO dashboard_signals (
@@ -417,6 +412,16 @@ def run_0050_batch(db_name=DB_NAME, version=STRATEGY_VERSION):
 
     except Exception as main_e:
         logging.error(f"系統錯誤: {main_e}")
+
+    # 🎯 實作雙重排序與淨化 TG 字串
+    alerts_setup = []
+    if raw_alerts:
+        # 依分數與收盤價降冪排序
+        raw_alerts.sort(key=lambda x: (x['score'], x['close']), reverse=True)
+        for a in raw_alerts:
+            tk_clean = a['ticker'].split(".")[0]
+            rp_abs = abs(a['risk_pct'])
+            alerts_setup.append(f"{tk_clean} |📊{a['score']} | 🟢{a['high']:.2f} | 🔴{a['stop_target']:.2f} ({rp_abs:.1f}%)")
 
     final_message = build_telegram_report(version, alerts_setup)
     send_telegram_alert(final_message)
